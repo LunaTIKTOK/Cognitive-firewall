@@ -1,7 +1,7 @@
 """Version 1: minimal claim verification report structure."""
 
 
-def verify_claim(claim):
+def verify_claim(claim, sources, facts, gaps, verdict):
     """Print a simple structured verification report for a claim."""
     print("=" * 60)
     print("CLAIM")
@@ -11,25 +11,23 @@ def verify_claim(claim):
 
     print("SOURCES")
     print("-" * 60)
-    print("1. Cerebras Benchmark or product page describing inference performance")
-    print("2. Nvidia documentation or third party benchmark describing GPU inference architecture")
-    print()
+    for source in sources:
+        print(f"- {source}")
+    
 
     print("FACTS")
     print("-" * 60)
-    print("1. Cerebras reports lower latency or higher tokens per second for some large model inference workloads")
-    print("2. Nvidia large model inference uses multi GPU systems with interconnect overhead")
-    print()
+    for fact in facts:
+        print(f"- {fact}")
 
     print("GAPS / CONTRADICTIONS")
     print("-" * 60)
-    print("1. Benchmark conditions may differ across vendors and may not be directly comparable")
-    print("2. Vendor reported performance may not generalize across all models and workloads")
-    print()
+    for gap in gaps:
+        print(f"- {gap}")
 
     print("VERDICT")
     print("-" * 60)
-    print("PARTIALLY VERIFIED")
+    print("verdict")
     print("=" * 60)
 
 
@@ -38,10 +36,44 @@ if __name__ == "__main__":
         "Cerebras delivers significantly lower latency than Nvidia "
         "for large model inference"
     )
-    verify_claim(sample_claim)
+    sources_1 = [
+    "Cerebras benchmark or product page describing inference performance",
+    "Nvidia documentation or third party benchmark describing GPU inference architecture"
+]
+
+facts_1 = [
+    "Cerebras reports lower latency or higher tokens per second for some large model inference workloads",
+    "Nvidia large model inference uses multi GPU systems with interconnect overhead"
+]
+
+gaps_1 = [
+    "Benchmark conditions may differ across vendors and may not be directly comparable",
+    "Vendor reported performance may not generalize across all models and workloads"
+]
+
+verdict_1 = "PARTIALLY VERIFIED"
+
+verify_claim(sample_claim, sources_1, facts_1, gaps_1, verdict_1)
 
     print("\n" + "=" * 60 + "\n")
 
 second_claim = "Coinbase and USDC will become the primary settlement layer for AI agents"
 
-verify_claim(second_claim)
+sources_2 = [
+    "Coinbase documentation on Base, USDC, and agent infrastructure",
+    "Articles or reports discussing USDC usage and agent based payments"
+]
+
+facts_2 = [
+    "USDC is widely used for on chain settlement and stable value transfer",
+    "Coinbase provides infrastructure including Base and wallets that can support agent transactions"
+]
+
+gaps_2 = [
+    "No guarantee Coinbase will dominate over all competitors in agent settlement",
+    "Regulation and competing protocols could change the outcome"
+]
+
+verdict_2 = "UNVERIFIED"
+
+verify_claim(second_claim, sources_2, facts_2, gaps_2, verdict_2)

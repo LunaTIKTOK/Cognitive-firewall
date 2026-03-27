@@ -39,3 +39,9 @@ if __name__ == "__main__":
         "for large model inference"
     )
     verify_claim(sample_claim)
+
+    print("\n" + "=" * 60 + "\n")
+
+second_claim = "Coinbase and USDC will become the primary settlement layer for AI agents"
+
+verify_claim(second_claim)

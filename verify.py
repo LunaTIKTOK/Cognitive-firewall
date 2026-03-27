@@ -77,3 +77,24 @@ gaps_2 = [
 verdict_2 = "UNVERIFIED"
 
 verify_claim(second_claim, sources_2, facts_2, gaps_2, verdict_2)
+
+third_claim = "x402 will dominate HTTP-native agent micropayments"
+
+sources_3 = [
+    "Documentation or examples describing x402 or HTTP based agent payments",
+    "Articles or posts discussing agent to agent payments over HTTP or API calls"
+]
+
+facts_3 = [
+    "x402 is designed to allow payments directly through HTTP requests",
+    "Agent systems can call APIs and execute transactions programmatically without human intervention"
+]
+
+gaps_3 = [
+    "x402 is still early and not widely adopted across the internet",
+    "Other payment protocols or blockchains could compete with HTTP based payment system"
+]
+
+verdict_3 = "UNVERIFIED"
+
+verify_claim(third_claim, sources_3, facts_3, gaps_3, verdict_3)

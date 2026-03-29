@@ -1,28 +1,13 @@
-# claim-verify
+# Claim-Verify
 
-A minimal open-source system that verifies claims against sources before action.
+Claim-Verify is a pre-execution risk engine for humans and AI agents.
 
-## What it does
+It takes any claim, task, or proposed action, estimates its reliability and the likely cost of being wrong, and decides whether execution should proceed, proceed with warning, or require human approval.
 
-Input:
-- a single claim
+This is not a fact-checker and not a generic safety wrapper. Claim-Verify is a control layer that prices uncertainty before action.
 
-Output:
-- sources
-- extracted facts
-- gaps or contradictions
-- final verdict
-
-## Why
-
-Bad decisions are often made on unverified information.
-
-claim-verify is a simple structure for forcing verification before acting.
-
-## Current status
-
-Version 1 is a minimal Python script with one real claim verification.
-
-## Goal
-
-Build a repeatable verification layer for research, markets, and agents.
+Its purpose is simple:
+- reduce decision error
+- reduce wasted compute
+- block structurally invalid or high-risk actions
+- escalate uncertain actions to a human when needed

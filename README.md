@@ -1,59 +1,86 @@
 # Constraint-Engine
 
-Constraint-Engine is a **constitutional authority layer for agent execution**.
+Constraint-Engine is **runtime governance infrastructure for agents**.
 
-The model/runtime is an **untrusted proposer**.
-The authority layer is the **trusted executor**.
+This repository has shifted from **validator** to **governor**:
 
-## Single Public Execution Surface
+- validator: classify/risk score outputs
+- governor: define and enforce pre-action execution boundaries
 
-There is exactly one allowed execution path:
+## Governance pipeline
+
+The runtime model is:
+
+1. **permissioning** (state + policy + identity + solvency)
+2. **execution** (governed token-bound call path)
+3. **correction** (deterministic corrective routing)
+4. **audit** (violation and economic traceability)
+
+## Runtime state governance
+
+Supported operation modes:
+
+- `RESEARCH`
+- `DRAFTING`
+- `READ_ONLY`
+- `TRANSACTION`
+- `PRIVILEGED`
+- `HUMAN_REVIEW`
+- `QUARANTINED`
+
+Policies can target states and transitions and can deny or permit state movement.
+
+## Constraint hierarchy
+
+Constraint levels:
+
+- `HARD` (immutable)
+- `SOFT` (override requires explicit justification)
+- `GOAL` (task/session scoped)
+
+Constraint packs (examples):
+
+- `packs/financial_pack.json`
+- `packs/privacy_pack.json`
+- `packs/brand_pack.json`
+- `packs/system_pack.json`
+
+## Intent classes
+
+Intent classes are separated from raw tool names:
+
+- `DATA_ACCESS`
+- `DATA_EXPORT`
+- `COMMUNICATION`
+- `PAYMENT`
+- `TRADE`
+- `SYSTEM_MODIFICATION`
+- `AUTHORIZATION`
+- `UNKNOWN`
+
+## Sidecar-friendly API
+
+`governance_service.py` exposes:
+
+- `evaluate_request(...)`
+- `issue_governance_token(...)`
+- `execute(...)`
+
+Designed for future FastAPI/gRPC sidecar deployment.
+
+## Boundary API
+
+Public boundary functions in `gate.py`:
 
 ```python
-execute(intent: str, actor_context: dict, tool_name: str, tool_args: dict)
+configure_authority(...)
+register_tool(...)
+issue_governance_token(intent, actor_context, tool_name, tool_args)
+execute(intent, actor_context, tool_name, tool_args)
 ```
-
-Any direct core execution path or direct tool invocation path is unauthorized and must fail closed.
-
-## Governance Authorization Is Mandatory
-
-All downstream tools require valid governance authorization on every call.
-A governance token is required and must be:
-
-- signed (HMAC-SHA256)
-- scoped to agent + intent + tool + policy set
-- time-bounded (`issued_at` / `expires_at`)
-- one-time use
-
-Unauthorized execution path attempts are **security violations**.
-
-## Solvency and Bond Enforcement
-
-Execution also requires solvency and bond locking:
-
-- bond lock before execution
-- bond release on valid execution
-- bond forfeiture on invalid/missing/replayed token attempts
-
-## Replay Token Persistence Strategy
-
-`authority.py` provides a replay-store interface (`UsedTokenStore`) and default
-`InMemoryUsedTokenStore` implementation.
-
-- **Current default:** in-memory store (suitable for tests/dev)
-- **Production requirement:** implement `UsedTokenStore` with persistent shared storage
-  (e.g., redis/database/kv) so consumed token ids survive process restarts and scale-out.
 
 ## Demo
 
 ```bash
 python middleware_example.py
 ```
-
-Shows:
-
-- authorized execution
-- forged token blocked
-- replay blocked
-- insufficient balance lockout
-- direct bypass blocked

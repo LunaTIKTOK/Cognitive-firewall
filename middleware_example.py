@@ -2,8 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-from authority import build_token, serialize_token
-from gate import blocked_core_access, configure_authority, execute, register_tool
+from gate import KeyRing, _GlassWingCore, configure_authority, execute, issue_governance_token, register_tool
 from mcp_executor import PaymentGate, SecurityViolationError
 
 
@@ -27,60 +26,57 @@ def _ctx(agent_id: str, policy_ids: list[str], token: str | None) -> dict:
     }
 
 
-def _build_token(secret: str, agent_id: str, intent: str, tool_name: str, policy_ids: list[str]) -> str:
-    return serialize_token(
-        build_token(
-            agent_id=agent_id,
-            intent=intent,
-            tool_name=tool_name,
-            policy_ids=policy_ids,
-            secret=secret,
-            ttl_seconds=300,
-        )
-    )
-
-
 def main() -> int:
     secret = "stage3-demo-secret"
+    key_id = "kid-v1"
     agent_id = "agent-demo"
     intent = "safe_scan"
     tool_name = "tool.scan"
     policy_ids = ["policy.constitution.v1", "policy.solvency.v1"]
 
-    configure_authority(secret=secret, payment_gate=PaymentGate(wallet_balances={agent_id: 50.0}))
+    configure_authority(
+        key_ring=KeyRing(active_key_id=key_id, keys={key_id: secret}),
+        payment_gate=PaymentGate(wallet_balances={agent_id: 50.0}),
+    )
 
     def scan_tool(args: dict) -> dict:
         return {"ok": True, "echo": args.get("claim", "")}
 
     register_tool(tool_name, scan_tool)
 
-    good_token = _build_token(secret, agent_id, intent, tool_name, policy_ids)
-    out = execute(intent, _ctx(agent_id, policy_ids, good_token), tool_name, {"claim": "safe claim"})
+    payload = {"claim": "safe claim"}
+    base_ctx = _ctx(agent_id, policy_ids, None)
+
+    good_token = issue_governance_token(intent, base_ctx, tool_name, payload)
+    out = execute(intent, {**base_ctx, "governance_token": good_token}, tool_name, payload)
     print("AUTHORIZED_EXECUTION:", out["executed"], out["result"])
 
     forged = good_token[:-1] + ("0" if good_token[-1] != "0" else "1")
     try:
-        execute(intent, _ctx(agent_id, policy_ids, forged), tool_name, {"claim": "safe claim"})
+        execute(intent, {**base_ctx, "governance_token": forged}, tool_name, payload)
     except SecurityViolationError as exc:
         print("FORGED_TOKEN_BLOCKED:", exc.reason, exc.retry_tax_usd, exc.bond_forfeited_usd)
 
-    replay = _build_token(secret, agent_id, intent, tool_name, policy_ids)
-    execute(intent, _ctx(agent_id, policy_ids, replay), tool_name, {"claim": "safe claim"})
+    replay = issue_governance_token(intent, base_ctx, tool_name, payload)
+    execute(intent, {**base_ctx, "governance_token": replay}, tool_name, payload)
     try:
-        execute(intent, _ctx(agent_id, policy_ids, replay), tool_name, {"claim": "safe claim"})
+        execute(intent, {**base_ctx, "governance_token": replay}, tool_name, payload)
     except SecurityViolationError as exc:
         print("REPLAY_BLOCKED:", exc.reason, exc.retry_tax_usd, exc.bond_forfeited_usd)
 
-    configure_authority(secret=secret, payment_gate=PaymentGate(wallet_balances={agent_id: 1.0}))
+    configure_authority(
+        key_ring=KeyRing(active_key_id=key_id, keys={key_id: secret}),
+        payment_gate=PaymentGate(wallet_balances={agent_id: 1.0}),
+    )
     register_tool(tool_name, scan_tool)
-    poor_token = _build_token(secret, agent_id, intent, tool_name, policy_ids)
+    poor_token = issue_governance_token(intent, base_ctx, tool_name, payload)
     try:
-        execute(intent, _ctx(agent_id, policy_ids, poor_token), tool_name, {"claim": "safe claim"})
+        execute(intent, {**base_ctx, "governance_token": poor_token}, tool_name, payload)
     except RuntimeError as exc:
         print("INSUFFICIENT_BALANCE_LOCKOUT:", str(exc))
 
     try:
-        blocked_core_access().run("unsafe")
+        _GlassWingCore().run("unsafe")
     except RuntimeError as exc:
         print("DIRECT_BYPASS_BLOCKED:", str(exc))
 

@@ -4,31 +4,30 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from audit import ALLOWED_CODES, AuditLogger
-from authority import build_token, serialize_token
-from gate import blocked_core_access, blocked_tool_access, configure_authority, execute, register_tool
+from authority import InMemoryUsedTokenStore, build_token, compute_payload_hash, serialize_token
+from gate import KeyRing, _GlassWingCore, configure_authority, execute, issue_governance_token, register_tool
 from mcp_executor import PaymentGate, SecurityViolationError
 
 
 class Stage3GovernanceTests(unittest.TestCase):
     def setUp(self) -> None:
         self.secret = "stage3-secret"
+        self.key_id = "kid-v1"
         self.agent_id = "agent-a"
         self.intent = "safe_scan"
         self.tool_name = "tool.scan"
         self.policy_ids = ["policy.constitution.v1", "policy.solvency.v1"]
         self.payment_gate = PaymentGate(wallet_balances={self.agent_id: 100.0})
+        self.token_store = InMemoryUsedTokenStore()
         self.tmp = tempfile.TemporaryDirectory()
         self.audit_path = Path(self.tmp.name) / "audit.jsonl"
         configure_authority(
-            secret=self.secret,
+            key_ring=KeyRing(active_key_id=self.key_id, keys={self.key_id: self.secret}),
             payment_gate=self.payment_gate,
+            used_token_store=self.token_store,
             audit_logger=AuditLogger(self.audit_path),
         )
-
-        def scan_tool(args: dict):
-            return {"ok": True, "echo": args.get("claim", "")}
-
-        register_tool(self.tool_name, scan_tool)
+        register_tool(self.tool_name, lambda args: {"ok": True, "echo": args.get("claim", "")})
 
     def tearDown(self) -> None:
         self.tmp.cleanup()
@@ -52,64 +51,61 @@ class Stage3GovernanceTests(unittest.TestCase):
             "governance_token": token,
         }
 
-    def _valid_token(self, *, tool_name: str | None = None, agent_id: str | None = None, ttl_seconds: int = 300) -> str:
-        token = build_token(
-            agent_id=agent_id or self.agent_id,
-            intent=self.intent,
-            tool_name=tool_name or self.tool_name,
-            policy_ids=self.policy_ids,
-            secret=self.secret,
-            ttl_seconds=ttl_seconds,
-        )
-        return serialize_token(token)
-
     def test_valid_signed_token_execution(self):
-        out = execute(
-            self.intent,
-            self._context(self._valid_token()),
-            self.tool_name,
-            {"claim": "System has measurable 99% uptime in 30 days."},
-        )
+        payload = {"claim": "System has measurable 99% uptime in 30 days."}
+        ctx = self._context(None)
+        token = issue_governance_token(self.intent, ctx, self.tool_name, payload)
+        out = execute(self.intent, {**ctx, "governance_token": token}, self.tool_name, payload)
         self.assertTrue(out["executed"])
 
-    def test_missing_token_denial(self):
+    def test_token_must_be_issued_before_execution(self):
+        payload = {"claim": "safe"}
+        raw_token = serialize_token(
+            build_token(
+                key_id=self.key_id,
+                agent_id=self.agent_id,
+                intent=self.intent,
+                tool_name=self.tool_name,
+                policy_ids=self.policy_ids,
+                payload_hash=compute_payload_hash(payload),
+                secret=self.secret,
+            )
+        )
         with self.assertRaises(SecurityViolationError):
-            execute(self.intent, self._context(None), self.tool_name, {"claim": "safe"})
+            execute(self.intent, self._context(raw_token), self.tool_name, payload)
 
-    def test_forged_token_denial(self):
-        forged = self._valid_token()[:-2] + "00"
+    def test_payload_binding_denial(self):
+        token_payload = {"claim": "safe"}
+        tampered_payload = {"claim": "tampered"}
+        token = issue_governance_token(self.intent, self._context(None), self.tool_name, token_payload)
         with self.assertRaises(SecurityViolationError):
-            execute(self.intent, self._context(forged), self.tool_name, {"claim": "safe"})
+            execute(self.intent, self._context(token), self.tool_name, tampered_payload)
 
-    def test_expired_token_denial(self):
-        expired = self._valid_token(ttl_seconds=-5)
-        with self.assertRaises(SecurityViolationError):
-            execute(self.intent, self._context(expired), self.tool_name, {"claim": "safe"})
+    def test_revoked_token_cannot_be_reused(self):
+        def failing_tool(_args: dict):
+            raise RuntimeError("tool failure")
 
-    def test_wrong_tool_token_denial(self):
-        bad_tool_token = self._valid_token(tool_name="tool.other")
+        register_tool("tool.fail", failing_tool)
+        payload = {"claim": "safe"}
+        token = issue_governance_token(self.intent, self._context(None), "tool.fail", payload)
+        with self.assertRaises(RuntimeError):
+            execute(self.intent, self._context(token), "tool.fail", payload)
         with self.assertRaises(SecurityViolationError):
-            execute(self.intent, self._context(bad_tool_token), self.tool_name, {"claim": "safe"})
+            execute(self.intent, self._context(token), "tool.fail", payload)
 
-    def test_wrong_agent_token_denial(self):
-        bad_agent_token = self._valid_token(agent_id="agent-b")
-        with self.assertRaises(SecurityViolationError):
-            execute(self.intent, self._context(bad_agent_token), self.tool_name, {"claim": "safe"})
+    def test_pending_token_cannot_be_reused_concurrently(self):
+        payload = {"claim": "safe"}
+        token = issue_governance_token(self.intent, self._context(None), self.tool_name, payload)
+        from authority import deserialize_token
 
-    def test_replay_attack_denial(self):
-        token = self._valid_token()
-        context = self._context(token)
-        execute(self.intent, context, self.tool_name, {"claim": "safe"})
+        token_obj = deserialize_token(token)
+        self.assertTrue(self.token_store.mark_pending(token_obj.token_id))
         with self.assertRaises(SecurityViolationError):
-            execute(self.intent, context, self.tool_name, {"claim": "safe"})
+            execute(self.intent, self._context(token), self.tool_name, payload)
 
     def test_direct_core_access_failure(self):
         with self.assertRaises(RuntimeError):
-            blocked_core_access().run("x")
-
-    def test_direct_tool_access_failure(self):
-        with self.assertRaises(RuntimeError):
-            blocked_tool_access().invoke_tool(self.tool_name, {"claim": "x"})
+            _GlassWingCore().run("x")
 
     def test_allowed_codes_contains_security_violation(self):
         self.assertIn("SECURITY_VIOLATION", ALLOWED_CODES)

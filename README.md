@@ -1,6 +1,6 @@
-# Constraint Engine
+# Cognitive Firewall
 
-Constraint Engine is a runtime governance system for AI agents.
+Cognitive Firewall is a runtime governance system for AI agents.
 
 It sits between reasoning and execution.
 

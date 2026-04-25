@@ -47,33 +47,40 @@ def main() -> int:
     payload = {"claim": "safe claim"}
     base_ctx = _ctx(agent_id, policy_ids, None)
 
-    good_token = issue_governance_token(intent, base_ctx, tool_name, payload)
-    out = execute(intent, {**base_ctx, "governance_token": good_token}, tool_name, payload)
-    print("AUTHORIZED_EXECUTION:", out["executed"], out["result"])
+    issuance = issue_governance_token(intent, base_ctx, tool_name, payload)
+    print("GOVERNANCE_DECISION:", issuance)
+    if issuance["decision"] == "ALLOW" and issuance["token"]:
+        out = execute(intent, base_ctx, issuance, tool_name, payload)
+        print("AUTHORIZED_EXECUTION:", out["executed"], out["result"])
 
-    forged = good_token[:-1] + ("0" if good_token[-1] != "0" else "1")
-    try:
-        execute(intent, {**base_ctx, "governance_token": forged}, tool_name, payload)
-    except SecurityViolationError as exc:
-        print("FORGED_TOKEN_BLOCKED:", exc.reason, exc.retry_tax_usd, exc.bond_forfeited_usd)
+    if issuance["decision"] == "ALLOW" and issuance["token"]:
+        forged = issuance["token"][:-1] + ("0" if issuance["token"][-1] != "0" else "1")
+        try:
+            execute(intent, base_ctx, {**issuance, "token": forged}, tool_name, payload)
+        except SecurityViolationError as exc:
+            print("FORGED_TOKEN_BLOCKED:", exc.reason, exc.retry_tax_usd, exc.bond_forfeited_usd)
 
-    replay = issue_governance_token(intent, base_ctx, tool_name, payload)
-    execute(intent, {**base_ctx, "governance_token": replay}, tool_name, payload)
-    try:
-        execute(intent, {**base_ctx, "governance_token": replay}, tool_name, payload)
-    except SecurityViolationError as exc:
-        print("REPLAY_BLOCKED:", exc.reason, exc.retry_tax_usd, exc.bond_forfeited_usd)
+        replay = issue_governance_token(intent, base_ctx, tool_name, payload)
+        print("REPLAY_GOVERNANCE_DECISION:", replay)
+        if replay["decision"] == "ALLOW" and replay["token"]:
+            execute(intent, base_ctx, replay, tool_name, payload)
+            try:
+                execute(intent, base_ctx, replay, tool_name, payload)
+            except SecurityViolationError as exc:
+                print("REPLAY_BLOCKED:", exc.reason, exc.retry_tax_usd, exc.bond_forfeited_usd)
 
     configure_authority(
         key_ring=KeyRing(active_key_id=key_id, keys={key_id: secret}),
         payment_gate=PaymentGate(wallet_balances={agent_id: 1.0}),
     )
     register_tool(tool_name, scan_tool)
-    poor_token = issue_governance_token(intent, base_ctx, tool_name, payload)
-    try:
-        execute(intent, {**base_ctx, "governance_token": poor_token}, tool_name, payload)
-    except RuntimeError as exc:
-        print("INSUFFICIENT_BALANCE_LOCKOUT:", str(exc))
+    poor_issuance = issue_governance_token(intent, base_ctx, tool_name, payload)
+    print("LOW_BALANCE_GOVERNANCE_DECISION:", poor_issuance)
+    if poor_issuance["decision"] == "ALLOW" and poor_issuance["token"]:
+        try:
+            execute(intent, base_ctx, poor_issuance, tool_name, payload)
+        except RuntimeError as exc:
+            print("INSUFFICIENT_BALANCE_LOCKOUT:", str(exc))
 
     try:
         _GlassWingCore().run("unsafe")

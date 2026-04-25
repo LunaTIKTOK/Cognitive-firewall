@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import uuid
 from typing import Any
 
 from gate import execute as _execute
@@ -26,6 +27,7 @@ def evaluate_request(
     current_state: RuntimeState,
     requested_next_state: RuntimeState,
 ):
+    actor_context["correlation_id"] = str(actor_context.get("correlation_id") or uuid.uuid4().hex)
     intent_class = classify_intent(tool_name, intent)
     decision = evaluate_runtime_governance(
         current_state=current_state,
@@ -51,11 +53,22 @@ def evaluate_request(
     return decision
 
 
-def issue_governance_token(intent: str, actor_context: dict, tool_name: str, tool_args: dict) -> str:
+def issue_governance_token(intent: str, actor_context: dict, tool_name: str, tool_args: dict) -> dict[str, Any]:
     if not actor_context.get("governance_issuance_ticket"):
-        raise RuntimeError("UNAUTHORIZED_EXECUTION: evaluate_request must pass before token issuance")
-    return _issue_governance_token(intent, actor_context, tool_name, tool_args)
+        response = {
+            "decision": "BLOCK",
+            "allow_secrets": False,
+            "token": None,
+            "reason": "evaluate_request must pass before token issuance",
+            "next_state": str(actor_context.get("state", "RESEARCH")),
+            "correlation_id": str(actor_context.get("correlation_id") or uuid.uuid4().hex),
+        }
+        actor_context["governance_decision"] = response
+        return response
+    response = _issue_governance_token(intent, actor_context, tool_name, tool_args)
+    actor_context["governance_decision"] = response
+    return response
 
 
-def execute(intent: str, actor_context: dict, tool_name: str, tool_args: dict):
-    return _execute(intent, actor_context, tool_name, tool_args)
+def execute(intent: str, actor_context: dict, governance_decision: dict[str, Any], tool_name: str, tool_args: dict):
+    return _execute(intent, actor_context, governance_decision, tool_name, tool_args)

@@ -178,6 +178,7 @@ class MCPGovernanceExecutor:
         retry_tax_usd: float,
         bond_forfeited_usd: float,
         token_id: str | None,
+        correlation_id: str | None,
     ) -> None:
         if not self._audit_logger:
             return
@@ -194,6 +195,7 @@ class MCPGovernanceExecutor:
                 "bond_forfeited_usd": round(bond_forfeited_usd, 6),
                 "security_violation": True,
                 "token_id": token_id,
+                "correlation_id": correlation_id,
             },
         )
 
@@ -206,6 +208,7 @@ class MCPGovernanceExecutor:
         tool_name: str,
         policy_ids: list[str],
         token_id: str | None,
+        correlation_id: str | None,
         retry_tax_usd: float = 1.5,
         bond_penalty_usd: float = 5.0,
     ) -> None:
@@ -219,6 +222,7 @@ class MCPGovernanceExecutor:
             retry_tax_usd=retry_tax_usd,
             bond_forfeited_usd=forfeited,
             token_id=token_id,
+            correlation_id=correlation_id,
         )
         raise SecurityViolationError(reason, retry_tax_usd=retry_tax_usd, bond_forfeited_usd=forfeited, token_id=token_id)
 
@@ -232,6 +236,7 @@ class MCPGovernanceExecutor:
         expected_tool_name: str,
         expected_policy_ids: list[str],
         tool_args: dict[str, Any],
+        correlation_id: str | None = None,
     ) -> Any:
         if not governance_token:
             self._apply_penalty_and_raise(
@@ -241,6 +246,7 @@ class MCPGovernanceExecutor:
                 tool_name=expected_tool_name,
                 policy_ids=expected_policy_ids,
                 token_id=None,
+                correlation_id=correlation_id,
             )
 
         try:
@@ -253,6 +259,7 @@ class MCPGovernanceExecutor:
                 tool_name=expected_tool_name,
                 policy_ids=expected_policy_ids,
                 token_id=None,
+                correlation_id=correlation_id,
             )
             raise  # pragma: no cover
 
@@ -265,6 +272,7 @@ class MCPGovernanceExecutor:
                 tool_name=expected_tool_name,
                 policy_ids=expected_policy_ids,
                 token_id=token.token_id,
+                correlation_id=correlation_id,
             )
 
         payload_hash = compute_payload_hash(tool_args)
@@ -287,6 +295,7 @@ class MCPGovernanceExecutor:
                 tool_name=expected_tool_name,
                 policy_ids=expected_policy_ids,
                 token_id=token.token_id,
+                correlation_id=correlation_id,
             )
 
         if not self._used_token_store.mark_pending(token.token_id):
@@ -297,6 +306,7 @@ class MCPGovernanceExecutor:
                 tool_name=expected_tool_name,
                 policy_ids=expected_policy_ids,
                 token_id=token.token_id,
+                correlation_id=correlation_id,
             )
 
         tool = self._tools.get(expected_tool_name)
@@ -309,6 +319,7 @@ class MCPGovernanceExecutor:
                 tool_name=expected_tool_name,
                 policy_ids=expected_policy_ids,
                 token_id=token.token_id,
+                correlation_id=correlation_id,
             )
 
         guarded_args = dict(tool_args)

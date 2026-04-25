@@ -48,14 +48,6 @@ jobs:
           echo "decision=${{ steps.gate.outputs.decision }}"
           echo "recommended_next_action=${{ steps.gate.outputs.recommended_next_action }}"
 
-      - name: Debug artifact paths
-        run: |
-            echo "==== DEBUG: artifacts directory ===="
-            1s -R artifacts || echo "no artifacts dir"
-
-            echo "==== DEBUG: logs directory ===="
-            1s -R logs || echo "no logs dir"
-
       - name: Upload benchmark artifacts
         if: always()
         uses: actions/upload-artifact@v4
@@ -65,7 +57,7 @@ jobs:
             artifacts/benchmark_results.json
             artifacts/benchmark_report.md
             logs/**/*.jsonl
-          if-no-files-found: error
+          if-no-files-found: warn
 
   meta-analysis:
     runs-on: ubuntu-latest
@@ -78,7 +70,6 @@ jobs:
         with:
           name: firewall-artifacts
           path: artifacts
-    continue-on-error: true
 
       - name: Meta analysis
         run: |

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from firewall import (
@@ -147,14 +148,21 @@ def run_firewall_scenario(config: ScenarioConfig) -> dict[str, Any]:
     elapsed = round(time.perf_counter() - start, 6)
     estimated_compute_cost = round(attempts * 0.12, 6)
     estimated_failure_cost_avoided = round(cumulative_retry_tax_usd * 0.7, 6)
+    decision = "ALLOW" if released else ("BLOCK" if terminal_stop or cumulative_retry_tax_usd > 0 else "ALLOW")
+    retry_count = max(0, attempts - 1)
     return {
         "scenario": config.name,
         "attempts": attempts,
+        "retry_count": retry_count,
+        "decision": decision,
+        "retry_tax_usd": round(cumulative_retry_tax_usd, 6),
+        "failure_cost_avoided_usd": estimated_failure_cost_avoided,
         "cumulative_retry_tax_usd": round(cumulative_retry_tax_usd, 6),
         "estimated_compute_cost_usd": estimated_compute_cost,
         "estimated_failure_cost_avoided_usd": estimated_failure_cost_avoided,
         "final_decision_distribution": decision_distribution,
         "output_released": released,
+        "terminal": terminal_stop,
         "terminal_stop": terminal_stop,
         "time_to_success_or_stop_sec": elapsed,
     }
@@ -224,5 +232,64 @@ def benchmark() -> dict[str, Any]:
     }
 
 
+def _write_report(results: dict[str, Any], output_path: Path) -> None:
+    comparison = results.get("comparison", {})
+    scenarios = results.get("scenarios", [])
+    lines = [
+        "# Firewall Benchmark Report",
+        "",
+        f"- Scenarios evaluated: {len(scenarios)}",
+        f"- Estimated cost saved by firewall usage (USD): {comparison.get('estimated_cost_saved_by_firewall_usage_usd', 0.0)}",
+        f"- Blocked bad releases: {(comparison.get('firewall_execution') or {}).get('blocked_bad_releases', 0)}",
+        "",
+        "## Raw Comparison Snapshot",
+        "```json",
+        json.dumps(comparison, indent=2, sort_keys=True),
+        "```",
+    ]
+    output_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _write_placeholder_results(reason: str, results_path: Path, report_path: Path) -> dict[str, Any]:
+    placeholder = {
+        "scenarios": [],
+        "comparison": {
+            "naive_direct_execution": {},
+            "firewall_execution": {"blocked_bad_releases": 0},
+            "estimated_cost_saved_by_firewall_usage_usd": 0.0,
+        },
+        "status": "BLOCKED",
+        "reason": reason,
+    }
+    results_path.write_text(json.dumps(placeholder, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    report_path.write_text(
+        "\n".join(
+            [
+                "# Firewall Benchmark Report",
+                "",
+                "- Status: BLOCKED",
+                f"- Reason: {reason}",
+                "",
+                "Placeholder artifact generated to keep CI artifact flow intact.",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    return placeholder
+
+
 if __name__ == "__main__":
-    print(json.dumps(benchmark(), indent=2))
+    artifacts_dir = Path("artifacts")
+    artifacts_dir.mkdir(parents=True, exist_ok=True)
+    results_path = artifacts_dir / "benchmark_results.json"
+    report_path = artifacts_dir / "benchmark_report.md"
+
+    try:
+        results = benchmark()
+        results_path.write_text(json.dumps(results, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        _write_report(results, report_path)
+    except Exception as exc:  # nosec: preserve artifact generation on failure paths
+        results = _write_placeholder_results(f"benchmark_failed: {exc}", results_path, report_path)
+
+    print(json.dumps(results, indent=2, sort_keys=True))

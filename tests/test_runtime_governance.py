@@ -1,6 +1,19 @@
+import json
+import tempfile
 import unittest
+from pathlib import Path
 
-from gate import KeyRing, PaymentGate, configure_authority, register_tool
+from audit import AuditLogger
+from benchmark_firewall_economics import ScenarioConfig, run_firewall_scenario
+from gate import (
+    KeyRing,
+    PaymentGate,
+    SQLiteGovernanceStateStore,
+    configure_authority,
+    issue_governance_token as gate_issue_governance_token,
+    mint_issuance_ticket,
+    register_tool,
+)
 from governance_service import evaluate_request, execute, issue_governance_token
 from mcp_executor import SecurityViolationError
 from runtime_governance import Constraint, RuntimeState, evaluate_runtime_governance
@@ -21,6 +34,7 @@ class RuntimeGovernanceTests(unittest.TestCase):
             return {"ok": True, "args": args}
 
         register_tool("tool.scan", tool)
+        register_tool("tool.secret.fetch", tool)
 
     def _actor_context(self) -> dict:
         return {
@@ -190,10 +204,10 @@ class RuntimeGovernanceTests(unittest.TestCase):
         )
         self.assertEqual(decision.status, "ALLOW")
 
-        token = issue_governance_token("query_customer_data", actor_context, "tool.scan", tool_args)
-        actor_context["governance_token"] = token
-
-        result = execute("query_customer_data", actor_context, "tool.scan", tool_args)
+        issuance = issue_governance_token("query_customer_data", actor_context, "tool.scan", tool_args)
+        self.assertEqual(issuance["decision"], "ALLOW")
+        self.assertIsNotNone(issuance["token"])
+        result = execute("query_customer_data", actor_context, issuance, "tool.scan", tool_args)
         self.assertTrue(result["executed"])
         self.assertEqual(self.calls["n"], 1)
 
@@ -213,11 +227,13 @@ class RuntimeGovernanceTests(unittest.TestCase):
             requested_next_state=RuntimeState.PRIVILEGED,
         )
         self.assertEqual(decision.status, "DENY")
-        with self.assertRaises(RuntimeError):
-            issue_governance_token("payment_transfer", actor_context, "tool.scan", tool_args)
+        issuance = issue_governance_token("payment_transfer", actor_context, "tool.scan", tool_args)
+        self.assertEqual(issuance["decision"], "BLOCK")
+        self.assertIsNone(issuance["token"])
 
-        with self.assertRaises(SecurityViolationError):
-            execute("payment_transfer", actor_context, "tool.scan", tool_args)
+        blocked = execute("payment_transfer", actor_context, issuance, "tool.scan", tool_args)
+        self.assertEqual(blocked["decision"], "BLOCK")
+        self.assertFalse(blocked["executed"])
         self.assertEqual(self.calls["n"], 0)
 
     def test_direct_issue_token_bypass(self):
@@ -226,8 +242,171 @@ class RuntimeGovernanceTests(unittest.TestCase):
         actor_context["requested_next_state"] = RuntimeState.READ_ONLY.value
         tool_args = {"claim": "safe claim"}
 
-        with self.assertRaises(RuntimeError):
-            issue_governance_token("query_customer_data", actor_context, "tool.scan", tool_args)
+        issuance = issue_governance_token("query_customer_data", actor_context, "tool.scan", tool_args)
+        self.assertEqual(issuance["decision"], "BLOCK")
+        self.assertIsNone(issuance["token"])
+
+    def test_invalid_state_transition_blocks(self):
+        actor_context = self._actor_context()
+        actor_context["state"] = "RESEARCH"
+        actor_context["current_state"] = RuntimeState.RESEARCH.value
+        actor_context["requested_next_state"] = RuntimeState.READ_ONLY.value
+        tool_args = {"claim": "safe claim"}
+
+        actor_context["governance_issuance_ticket"] = mint_issuance_ticket(
+            "payment_transfer", actor_context, "tool.scan", tool_args
+        )
+
+        issuance = gate_issue_governance_token("payment_transfer", actor_context, "tool.scan", tool_args)
+        self.assertEqual(issuance["decision"], "BLOCK")
+        self.assertEqual(issuance["next_state"], "RESEARCH")
+
+    def test_allow_secrets_false_blocks_secret_tool(self):
+        actor_context = self._actor_context()
+        actor_context["state"] = "RESEARCH"
+        actor_context["current_state"] = RuntimeState.RESEARCH.value
+        actor_context["requested_next_state"] = RuntimeState.READ_ONLY.value
+        actor_context["allow_secrets"] = True
+        tool_args = {"claim": "safe claim"}
+
+        actor_context["governance_issuance_ticket"] = mint_issuance_ticket(
+            "query_customer_data", actor_context, "tool.secret.fetch", tool_args
+        )
+        issuance = gate_issue_governance_token("query_customer_data", actor_context, "tool.secret.fetch", tool_args)
+        self.assertEqual(issuance["decision"], "ALLOW")
+        actor_context["allow_secrets"] = False
+        issuance["allow_secrets"] = False
+
+        out = execute("query_customer_data", actor_context, issuance, "tool.secret.fetch", tool_args)
+        self.assertEqual(out["decision"], "BLOCK")
+        self.assertFalse(out["executed"])
+
+    def test_next_state_updates_on_decision(self):
+        actor_context = self._actor_context()
+        actor_context["state"] = "RESEARCH"
+        actor_context["current_state"] = RuntimeState.RESEARCH.value
+        actor_context["requested_next_state"] = RuntimeState.READ_ONLY.value
+        tool_args = {"claim": "safe claim"}
+        evaluate_request(
+            intent="query_customer_data",
+            tool_name="tool.scan",
+            actor_context=actor_context,
+            tool_args=tool_args,
+            current_state=RuntimeState.RESEARCH,
+            requested_next_state=RuntimeState.READ_ONLY,
+        )
+        issuance = issue_governance_token("query_customer_data", actor_context, "tool.scan", tool_args)
+        self.assertEqual(issuance["next_state"], "READ_ONLY")
+
+    def test_retry_count_increments_in_benchmark(self):
+        result = run_firewall_scenario(ScenarioConfig(name="retry_test", mode="ambiguous", attempts=2))
+        self.assertEqual(result["retry_count"], 1)
+        self.assertIn("retry_tax_usd", result)
+        self.assertIn("terminal", result)
+
+    def test_token_replay_with_different_tool_blocks(self):
+        actor_context = self._actor_context()
+        actor_context["current_state"] = RuntimeState.RESEARCH.value
+        actor_context["requested_next_state"] = RuntimeState.READ_ONLY.value
+        tool_args = {"claim": "safe claim"}
+        evaluate_request(
+            intent="query_customer_data",
+            tool_name="tool.scan",
+            actor_context=actor_context,
+            tool_args=tool_args,
+            current_state=RuntimeState.RESEARCH,
+            requested_next_state=RuntimeState.READ_ONLY,
+        )
+        issuance = issue_governance_token("query_customer_data", actor_context, "tool.scan", tool_args)
+        blocked = execute("query_customer_data", actor_context, issuance, "tool.secret.fetch", tool_args)
+        self.assertEqual(blocked["decision"], "BLOCK")
+        self.assertFalse(blocked["executed"])
+
+    def test_payload_tampering_blocks(self):
+        actor_context = self._actor_context()
+        actor_context["current_state"] = RuntimeState.RESEARCH.value
+        actor_context["requested_next_state"] = RuntimeState.READ_ONLY.value
+        tool_args = {"claim": "safe claim"}
+        tampered_args = {"claim": "tampered claim"}
+        evaluate_request(
+            intent="query_customer_data",
+            tool_name="tool.scan",
+            actor_context=actor_context,
+            tool_args=tool_args,
+            current_state=RuntimeState.RESEARCH,
+            requested_next_state=RuntimeState.READ_ONLY,
+        )
+        issuance = issue_governance_token("query_customer_data", actor_context, "tool.scan", tool_args)
+        blocked = execute("query_customer_data", actor_context, issuance, "tool.scan", tampered_args)
+        self.assertEqual(blocked["decision"], "BLOCK")
+        self.assertFalse(blocked["executed"])
+
+    def test_manual_state_escalation_blocks(self):
+        actor_context = self._actor_context()
+        actor_context["state"] = "PRIVILEGED"
+        actor_context["current_state"] = RuntimeState.RESEARCH.value
+        actor_context["requested_next_state"] = RuntimeState.READ_ONLY.value
+        tool_args = {"claim": "safe claim"}
+        actor_context["governance_issuance_ticket"] = mint_issuance_ticket(
+            "payment_transfer", actor_context, "tool.scan", tool_args
+        )
+        issuance = gate_issue_governance_token("payment_transfer", actor_context, "tool.scan", tool_args)
+        self.assertEqual(issuance["decision"], "BLOCK")
+        self.assertIn("invalid transition", issuance["reason"])
+
+    def test_execution_without_governance_decision_blocks(self):
+        actor_context = self._actor_context()
+        blocked = execute("query_customer_data", actor_context, None, "tool.scan", {"claim": "safe"})
+        self.assertEqual(blocked["decision"], "BLOCK")
+        self.assertFalse(blocked["executed"])
+
+    def test_state_continuity_survives_restart_with_sqlite_store(self):
+        tmp = tempfile.TemporaryDirectory()
+        db = str(Path(tmp.name) / "gov_state.db")
+        store = SQLiteGovernanceStateStore(db)
+        actor_context = self._actor_context()
+        tool_args = {"claim": "safe claim"}
+
+        configure_authority(
+            key_ring=KeyRing(active_key_id=self.key_id, keys={self.key_id: self.secret}),
+            payment_gate=PaymentGate(wallet_balances={"agent-runtime": 100.0}),
+            governance_state_store=store,
+        )
+        register_tool("tool.scan", lambda args: {"ok": True, "args": args})
+        actor_context["governance_issuance_ticket"] = mint_issuance_ticket("query_customer_data", actor_context, "tool.scan", tool_args)
+        issuance = gate_issue_governance_token("query_customer_data", actor_context, "tool.scan", tool_args)
+        execute("query_customer_data", actor_context, issuance, "tool.scan", tool_args)
+
+        configure_authority(
+            key_ring=KeyRing(active_key_id=self.key_id, keys={self.key_id: self.secret}),
+            payment_gate=PaymentGate(wallet_balances={"agent-runtime": 100.0}),
+            governance_state_store=SQLiteGovernanceStateStore(db),
+        )
+        register_tool("tool.scan", lambda args: {"ok": True, "args": args})
+        actor_context["governance_issuance_ticket"] = mint_issuance_ticket("payment_transfer", actor_context, "tool.scan", tool_args)
+        blocked = gate_issue_governance_token("payment_transfer", actor_context, "tool.scan", tool_args)
+        self.assertEqual(blocked["decision"], "BLOCK")
+        tmp.cleanup()
+
+    def test_correlation_id_propagates_in_audit(self):
+        tmp = tempfile.TemporaryDirectory()
+        audit_path = Path(tmp.name) / "audit.jsonl"
+        actor_context = self._actor_context()
+        actor_context["correlation_id"] = "cid-runtime-1"
+        tool_args = {"claim": "safe claim"}
+        configure_authority(
+            key_ring=KeyRing(active_key_id=self.key_id, keys={self.key_id: self.secret}),
+            payment_gate=PaymentGate(wallet_balances={"agent-runtime": 100.0}),
+            audit_logger=AuditLogger(audit_path),
+        )
+        register_tool("tool.scan", lambda args: {"ok": True, "args": args})
+        actor_context["governance_issuance_ticket"] = mint_issuance_ticket("query_customer_data", actor_context, "tool.scan", tool_args)
+        issuance = gate_issue_governance_token("query_customer_data", actor_context, "tool.scan", tool_args)
+        execute("query_customer_data", actor_context, issuance, "tool.scan", tool_args)
+
+        rows = [json.loads(line) for line in audit_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+        self.assertTrue(any(row.get("correlation_id") == "cid-runtime-1" for row in rows))
+        tmp.cleanup()
 
 
 if __name__ == "__main__":

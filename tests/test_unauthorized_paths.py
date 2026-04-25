@@ -36,10 +36,13 @@ class UnauthorizedPathAuditTests(unittest.TestCase):
             "governance_token": token,
         }
 
-    def _issue_token(self, tool_name: str, payload: dict, ctx: dict | None = None) -> str:
+    def _issue_token(self, tool_name: str, payload: dict, ctx: dict | None = None) -> dict:
         context = dict(ctx or self._ctx(None))
         context["governance_issuance_ticket"] = mint_issuance_ticket(self.intent, context, tool_name, payload)
-        return issue_governance_token(self.intent, context, tool_name, payload)
+        issuance = issue_governance_token(self.intent, context, tool_name, payload)
+        self.assertEqual(issuance["decision"], "ALLOW")
+        self.assertIsNotNone(issuance["token"])
+        return issuance
 
     def test_direct_core_access_fails(self):
         with self.assertRaises(RuntimeError):
@@ -66,7 +69,7 @@ class UnauthorizedPathAuditTests(unittest.TestCase):
             )
         )
         with self.assertRaises(SecurityViolationError):
-            execute(self.intent, self._ctx(raw_token), self.tool_name, payload)
+            execute(self.intent, self._ctx(raw_token), {"decision": "ALLOW", "allow_secrets": True, "token": raw_token, "reason": None, "next_state": "READ_ONLY"}, self.tool_name, payload)
         from authority import deserialize_token
 
         self.assertIsNone(store.get_status(deserialize_token(raw_token).token_id))
@@ -77,8 +80,8 @@ class UnauthorizedPathAuditTests(unittest.TestCase):
             payment_gate=PaymentGate(wallet_balances={self.agent_id: 100.0}),
         )
         register_tool(self.tool_name, lambda args: {"ok": True, "args": args})
-        with self.assertRaises(SecurityViolationError):
-            execute(self.intent, self._ctx(None), self.tool_name, {"claim": "safe"})
+        blocked = execute(self.intent, self._ctx(None), {"decision": "ALLOW", "allow_secrets": True, "token": None, "reason": None, "next_state": "READ_ONLY"}, self.tool_name, {"claim": "safe"})
+        self.assertEqual(blocked["decision"], "BLOCK")
 
     def test_forged_token_fails(self):
         configure_authority(
@@ -87,10 +90,11 @@ class UnauthorizedPathAuditTests(unittest.TestCase):
         )
         register_tool(self.tool_name, lambda args: {"ok": True, "args": args})
         payload = {"claim": "safe"}
-        token = self._issue_token(self.tool_name, payload)
+        issuance = self._issue_token(self.tool_name, payload)
+        token = str(issuance["token"])
         forged = token[:-1] + ("0" if token[-1] != "0" else "1")
-        with self.assertRaises(SecurityViolationError):
-            execute(self.intent, self._ctx(forged), self.tool_name, payload)
+        blocked = execute(self.intent, self._ctx(None), {**issuance, "token": forged}, self.tool_name, payload)
+        self.assertEqual(blocked["decision"], "BLOCK")
 
     def test_replay_fails_after_restart_with_sqlite_store(self):
         tmp = tempfile.TemporaryDirectory()
@@ -103,8 +107,8 @@ class UnauthorizedPathAuditTests(unittest.TestCase):
             used_token_store=SQLiteUsedTokenStore(db),
         )
         register_tool(self.tool_name, lambda args: {"ok": True, "args": args})
-        token = self._issue_token(self.tool_name, payload)
-        execute(self.intent, self._ctx(token), self.tool_name, payload)
+        issuance = self._issue_token(self.tool_name, payload)
+        execute(self.intent, self._ctx(None), issuance, self.tool_name, payload)
 
         configure_authority(
             key_ring=KeyRing(active_key_id=self.key_id, keys={self.key_id: self.secret}),
@@ -113,7 +117,7 @@ class UnauthorizedPathAuditTests(unittest.TestCase):
         )
         register_tool(self.tool_name, lambda args: {"ok": True, "args": args})
         with self.assertRaises(SecurityViolationError):
-            execute(self.intent, self._ctx(token), self.tool_name, payload)
+            execute(self.intent, self._ctx(None), issuance, self.tool_name, payload)
         tmp.cleanup()
 
     def test_wrong_tool_token_fails(self):
@@ -123,9 +127,9 @@ class UnauthorizedPathAuditTests(unittest.TestCase):
         )
         register_tool(self.tool_name, lambda args: {"ok": True, "args": args})
         payload = {"claim": "safe"}
-        token = self._issue_token("tool.other", payload)
-        with self.assertRaises(SecurityViolationError):
-            execute(self.intent, self._ctx(token), self.tool_name, payload)
+        issuance = self._issue_token("tool.other", payload)
+        blocked = execute(self.intent, self._ctx(None), issuance, self.tool_name, payload)
+        self.assertEqual(blocked["decision"], "BLOCK")
 
     def test_wrong_agent_token_fails(self):
         configure_authority(
@@ -134,9 +138,9 @@ class UnauthorizedPathAuditTests(unittest.TestCase):
         )
         register_tool(self.tool_name, lambda args: {"ok": True, "args": args})
         payload = {"claim": "safe"}
-        token = self._issue_token(self.tool_name, payload, {**self._ctx(None), "agent_id": "agent-b"})
+        issuance = self._issue_token(self.tool_name, payload, {**self._ctx(None), "agent_id": "agent-b"})
         with self.assertRaises(SecurityViolationError):
-            execute(self.intent, self._ctx(token), self.tool_name, payload)
+            execute(self.intent, self._ctx(None), issuance, self.tool_name, payload)
 
     def test_payment_gate_transactional_locking_under_concurrency(self):
         tmp = tempfile.TemporaryDirectory()
@@ -158,6 +162,35 @@ class UnauthorizedPathAuditTests(unittest.TestCase):
 
         self.assertEqual(sum(1 for r in results if r), 1)
         tmp.cleanup()
+
+    def test_repo_wide_bypass_audit_no_tool_without_valid_governance(self):
+        calls = {"n": 0}
+        configure_authority(
+            key_ring=KeyRing(active_key_id=self.key_id, keys={self.key_id: self.secret}),
+            payment_gate=PaymentGate(wallet_balances={self.agent_id: 100.0}),
+        )
+
+        def counted_tool(_args: dict):
+            calls["n"] += 1
+            return {"ok": True}
+
+        register_tool(self.tool_name, counted_tool)
+        payload = {"claim": "safe", "api_key": "sekret"}
+
+        # No governance decision.
+        blocked = execute(self.intent, self._ctx(None), None, self.tool_name, payload)
+        self.assertEqual(blocked["decision"], "BLOCK")
+
+        # Governance decision but no token.
+        blocked = execute(
+            self.intent,
+            self._ctx(None),
+            {"decision": "ALLOW", "allow_secrets": True, "token": None, "reason": None, "next_state": "READ_ONLY"},
+            self.tool_name,
+            payload,
+        )
+        self.assertEqual(blocked["decision"], "BLOCK")
+        self.assertEqual(calls["n"], 0)
 
 
 if __name__ == "__main__":

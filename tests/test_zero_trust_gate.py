@@ -51,16 +51,19 @@ class Stage3GovernanceTests(unittest.TestCase):
             "governance_token": token,
         }
 
-    def _issue_token(self, tool_name: str, payload: dict, ctx: dict | None = None) -> str:
+    def _issue_token(self, tool_name: str, payload: dict, ctx: dict | None = None) -> dict:
         context = dict(ctx or self._context(None))
         context["governance_issuance_ticket"] = mint_issuance_ticket(self.intent, context, tool_name, payload)
-        return issue_governance_token(self.intent, context, tool_name, payload)
+        issuance = issue_governance_token(self.intent, context, tool_name, payload)
+        self.assertEqual(issuance["decision"], "ALLOW")
+        self.assertIsNotNone(issuance["token"])
+        return issuance
 
     def test_valid_signed_token_execution(self):
         payload = {"claim": "System has measurable 99% uptime in 30 days."}
         ctx = self._context(None)
-        token = self._issue_token(self.tool_name, payload, ctx)
-        out = execute(self.intent, {**ctx, "governance_token": token}, self.tool_name, payload)
+        issuance = self._issue_token(self.tool_name, payload, ctx)
+        out = execute(self.intent, ctx, issuance, self.tool_name, payload)
         self.assertTrue(out["executed"])
 
     def test_token_must_be_issued_before_execution(self):
@@ -77,14 +80,14 @@ class Stage3GovernanceTests(unittest.TestCase):
             )
         )
         with self.assertRaises(SecurityViolationError):
-            execute(self.intent, self._context(raw_token), self.tool_name, payload)
+            execute(self.intent, self._context(raw_token), {"decision": "ALLOW", "allow_secrets": True, "token": raw_token, "reason": None, "next_state": "READ_ONLY"}, self.tool_name, payload)
 
     def test_payload_binding_denial(self):
         token_payload = {"claim": "safe"}
         tampered_payload = {"claim": "tampered"}
-        token = self._issue_token(self.tool_name, token_payload)
-        with self.assertRaises(SecurityViolationError):
-            execute(self.intent, self._context(token), self.tool_name, tampered_payload)
+        issuance = self._issue_token(self.tool_name, token_payload)
+        blocked = execute(self.intent, self._context(None), issuance, self.tool_name, tampered_payload)
+        self.assertEqual(blocked["decision"], "BLOCK")
 
     def test_revoked_token_cannot_be_reused(self):
         def failing_tool(_args: dict):
@@ -92,21 +95,21 @@ class Stage3GovernanceTests(unittest.TestCase):
 
         register_tool("tool.fail", failing_tool)
         payload = {"claim": "safe"}
-        token = self._issue_token("tool.fail", payload)
+        issuance = self._issue_token("tool.fail", payload)
         with self.assertRaises(RuntimeError):
-            execute(self.intent, self._context(token), "tool.fail", payload)
+            execute(self.intent, self._context(None), issuance, "tool.fail", payload)
         with self.assertRaises(SecurityViolationError):
-            execute(self.intent, self._context(token), "tool.fail", payload)
+            execute(self.intent, self._context(None), issuance, "tool.fail", payload)
 
     def test_pending_token_cannot_be_reused_concurrently(self):
         payload = {"claim": "safe"}
-        token = self._issue_token(self.tool_name, payload)
+        issuance = self._issue_token(self.tool_name, payload)
         from authority import deserialize_token
 
-        token_obj = deserialize_token(token)
+        token_obj = deserialize_token(str(issuance["token"]))
         self.assertTrue(self.token_store.mark_pending(token_obj.token_id))
         with self.assertRaises(SecurityViolationError):
-            execute(self.intent, self._context(token), self.tool_name, payload)
+            execute(self.intent, self._context(None), issuance, self.tool_name, payload)
 
     def test_direct_core_access_failure(self):
         with self.assertRaises(RuntimeError):

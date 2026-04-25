@@ -16,6 +16,13 @@ The runtime model is:
 3. **correction** (deterministic corrective routing)
 4. **audit** (violation and economic traceability)
 
+```mermaid
+flowchart LR
+  A[evaluate_request] --> B[issue_governance_token]
+  B --> C[execute]
+  C --> D[audit]
+```
+
 ## Runtime state governance
 
 Supported operation modes:
@@ -76,11 +83,28 @@ Public boundary functions in `gate.py`:
 configure_authority(...)
 register_tool(...)
 issue_governance_token(intent, actor_context, tool_name, tool_args)
-execute(intent, actor_context, tool_name, tool_args)
+execute(intent, actor_context, governance_decision, tool_name, tool_args)
 ```
 
-## Demo
+Execution is blocked unless governance decision is `ALLOW`, token is present, and token context matches intent/tool/payload.
+
+## What this proves
+
+- denied requests cannot execute.
+- execution requires governed token.
+- tokens bind intent/tool/payload.
+- state survives restart with SQLite store.
+- secret access is denied unless explicitly allowed.
+
+## Quickstart
 
 ```bash
+# run full tests
+python -m unittest discover -s tests -v
+
+# run middleware demo
 python middleware_example.py
+
+# run benchmark
+python benchmark_firewall_economics.py
 ```

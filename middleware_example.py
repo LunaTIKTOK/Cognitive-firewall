@@ -2,8 +2,9 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-from gate import KeyRing, _GlassWingCore, configure_authority, execute, issue_governance_token, register_tool
-from mcp_executor import PaymentGate, SecurityViolationError
+from gate import KeyRing, _GlassWingCore, configure_authority, register_tool
+from interceptor import intercept_and_execute
+from mcp_executor import PaymentGate
 
 
 def _ctx(agent_id: str, policy_ids: list[str], token: str | None) -> dict:
@@ -47,40 +48,22 @@ def main() -> int:
     payload = {"claim": "safe claim"}
     base_ctx = _ctx(agent_id, policy_ids, None)
 
-    issuance = issue_governance_token(intent, base_ctx, tool_name, payload)
-    print("GOVERNANCE_DECISION:", issuance)
-    if issuance["decision"] == "ALLOW" and issuance["token"]:
-        out = execute(intent, base_ctx, issuance, tool_name, payload)
-        print("AUTHORIZED_EXECUTION:", out["executed"], out["result"])
-
-    if issuance["decision"] == "ALLOW" and issuance["token"]:
-        forged = issuance["token"][:-1] + ("0" if issuance["token"][-1] != "0" else "1")
-        try:
-            execute(intent, base_ctx, {**issuance, "token": forged}, tool_name, payload)
-        except SecurityViolationError as exc:
-            print("FORGED_TOKEN_BLOCKED:", exc.reason, exc.retry_tax_usd, exc.bond_forfeited_usd)
-
-        replay = issue_governance_token(intent, base_ctx, tool_name, payload)
-        print("REPLAY_GOVERNANCE_DECISION:", replay)
-        if replay["decision"] == "ALLOW" and replay["token"]:
-            execute(intent, base_ctx, replay, tool_name, payload)
-            try:
-                execute(intent, base_ctx, replay, tool_name, payload)
-            except SecurityViolationError as exc:
-                print("REPLAY_BLOCKED:", exc.reason, exc.retry_tax_usd, exc.bond_forfeited_usd)
+    outcome = intercept_and_execute(
+        {"intent": intent, "intent_text": "safe claim", "tool_name": tool_name, "tool_args": payload, "domain": "finance"},
+        base_ctx,
+    )
+    print("INTERCEPT_OUTCOME:", outcome)
 
     configure_authority(
         key_ring=KeyRing(active_key_id=key_id, keys={key_id: secret}),
         payment_gate=PaymentGate(wallet_balances={agent_id: 1.0}),
     )
     register_tool(tool_name, scan_tool)
-    poor_issuance = issue_governance_token(intent, base_ctx, tool_name, payload)
-    print("LOW_BALANCE_GOVERNANCE_DECISION:", poor_issuance)
-    if poor_issuance["decision"] == "ALLOW" and poor_issuance["token"]:
-        try:
-            execute(intent, base_ctx, poor_issuance, tool_name, payload)
-        except RuntimeError as exc:
-            print("INSUFFICIENT_BALANCE_LOCKOUT:", str(exc))
+    poor_outcome = intercept_and_execute(
+        {"intent": intent, "intent_text": "safe claim", "tool_name": tool_name, "tool_args": payload, "domain": "finance"},
+        base_ctx,
+    )
+    print("LOW_BALANCE_INTERCEPT_OUTCOME:", poor_outcome)
 
     try:
         _GlassWingCore().run("unsafe")

@@ -2,6 +2,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from audit import AuditLogger
 from benchmark_firewall_economics import ScenarioConfig, run_firewall_scenario
@@ -359,6 +360,87 @@ class RuntimeGovernanceTests(unittest.TestCase):
         blocked = execute("query_customer_data", actor_context, None, "tool.scan", {"claim": "safe"})
         self.assertEqual(blocked["decision"], "BLOCK")
         self.assertFalse(blocked["executed"])
+
+    def test_invalid_actor_identity_returns_block(self):
+        actor_context = self._actor_context()
+        tool_args = {"claim": "safe claim"}
+        evaluate_request(
+            intent="query_customer_data",
+            tool_name="tool.scan",
+            actor_context=actor_context,
+            tool_args=tool_args,
+            current_state=RuntimeState.RESEARCH,
+            requested_next_state=RuntimeState.READ_ONLY,
+        )
+        issuance = issue_governance_token("query_customer_data", actor_context, "tool.scan", tool_args)
+        bad_context = dict(actor_context)
+        bad_context.pop("agent_id", None)
+        blocked = execute("query_customer_data", bad_context, issuance, "tool.scan", tool_args)
+        self.assertEqual(blocked["decision"], "BLOCK")
+        self.assertEqual(blocked["reason"], "invalid actor identity")
+
+    def test_policy_denied_execution_returns_block(self):
+        actor_context = self._actor_context()
+        tool_args = {"claim": "unsafe unsupported high risk claim with no evidence"}
+        evaluate_request(
+            intent="query_customer_data",
+            tool_name="tool.scan",
+            actor_context=actor_context,
+            tool_args=tool_args,
+            current_state=RuntimeState.RESEARCH,
+            requested_next_state=RuntimeState.READ_ONLY,
+        )
+        issuance = issue_governance_token("query_customer_data", actor_context, "tool.scan", tool_args)
+        with patch("gate.decide_policy", return_value="DENY"):
+            blocked = execute("query_customer_data", actor_context, issuance, "tool.scan", tool_args)
+        self.assertEqual(blocked["decision"], "BLOCK")
+        self.assertEqual(blocked["reason"], "policy denied execution")
+
+    def test_insufficient_solvency_returns_block(self):
+        configure_authority(
+            key_ring=KeyRing(active_key_id=self.key_id, keys={self.key_id: self.secret}),
+            payment_gate=PaymentGate(wallet_balances={"agent-runtime": 1.0}),
+        )
+        register_tool("tool.scan", lambda args: {"ok": True, "args": args})
+        actor_context = self._actor_context()
+        tool_args = {"claim": "safe claim"}
+        evaluate_request(
+            intent="query_customer_data",
+            tool_name="tool.scan",
+            actor_context=actor_context,
+            tool_args=tool_args,
+            current_state=RuntimeState.RESEARCH,
+            requested_next_state=RuntimeState.READ_ONLY,
+        )
+        issuance = issue_governance_token("query_customer_data", actor_context, "tool.scan", tool_args)
+        blocked = execute("query_customer_data", actor_context, issuance, "tool.scan", tool_args)
+        self.assertEqual(blocked["decision"], "BLOCK")
+        self.assertEqual(blocked["reason"], "insufficient solvency for governance bond")
+
+    def test_failed_bond_lock_returns_block(self):
+        class RefusingLockGate(PaymentGate):
+            def lock_bond(self, agent_id: str, amount_usd: float) -> bool:  # type: ignore[override]
+                return False
+
+        configure_authority(
+            key_ring=KeyRing(active_key_id=self.key_id, keys={self.key_id: self.secret}),
+            payment_gate=RefusingLockGate(wallet_balances={"agent-runtime": 100.0}),
+        )
+        register_tool("tool.scan", lambda args: {"ok": True, "args": args})
+        actor_context = self._actor_context()
+        tool_args = {"claim": "safe claim"}
+        evaluate_request(
+            intent="query_customer_data",
+            tool_name="tool.scan",
+            actor_context=actor_context,
+            tool_args=tool_args,
+            current_state=RuntimeState.RESEARCH,
+            requested_next_state=RuntimeState.READ_ONLY,
+        )
+        issuance = issue_governance_token("query_customer_data", actor_context, "tool.scan", tool_args)
+        blocked = execute("query_customer_data", actor_context, issuance, "tool.scan", tool_args)
+        self.assertEqual(blocked["decision"], "BLOCK")
+        self.assertEqual(blocked["reason"], "failed to lock governance bond")
 
     def test_state_continuity_survives_restart_with_sqlite_store(self):
         tmp = tempfile.TemporaryDirectory()

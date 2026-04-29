@@ -515,7 +515,15 @@ class _ConstitutionalAuthority:
         )
 
         if not identity_ok:
-            raise RuntimeError("UNAUTHORIZED_EXECUTION: invalid actor identity")
+            return {
+                "decision": "BLOCK",
+                "allow_secrets": allow_secrets,
+                "token": token,
+                "reason": "invalid actor identity",
+                "next_state": next_state,
+                "correlation_id": correlation_id,
+                "executed": False,
+            }
 
         if decision in {"DENY", "REQUIRE_REAUTH"}:
             update_reputation(
@@ -528,13 +536,37 @@ class _ConstitutionalAuthority:
                 confidence=float(verification.get("confidence", 0.0)),
                 degraded=True,
             )
-            raise RuntimeError("UNAUTHORIZED_EXECUTION: policy denied execution")
+            return {
+                "decision": "BLOCK",
+                "allow_secrets": allow_secrets,
+                "token": token,
+                "reason": "policy denied execution",
+                "next_state": next_state,
+                "correlation_id": correlation_id,
+                "executed": False,
+            }
 
         required_balance = self._required_bond(float(toxic.get("toxic_token_multiplier", 1.0)))
         if not self._payment_gate.ensure_solvency(agent_id, required_balance):
-            raise RuntimeError("UNAUTHORIZED_EXECUTION: insufficient solvency for governance bond")
+            return {
+                "decision": "BLOCK",
+                "allow_secrets": allow_secrets,
+                "token": token,
+                "reason": "insufficient solvency for governance bond",
+                "next_state": next_state,
+                "correlation_id": correlation_id,
+                "executed": False,
+            }
         if not self._payment_gate.lock_bond(agent_id, required_balance):
-            raise RuntimeError("UNAUTHORIZED_EXECUTION: failed to lock governance bond")
+            return {
+                "decision": "BLOCK",
+                "allow_secrets": allow_secrets,
+                "token": token,
+                "reason": "failed to lock governance bond",
+                "next_state": next_state,
+                "correlation_id": correlation_id,
+                "executed": False,
+            }
 
         try:
             result = self._executor.execute(
@@ -647,8 +679,30 @@ def issue_governance_token(intent: str, actor_context: dict, tool_name: str, too
     return _ensure_default_authority().issue_governance_token(intent, actor_context, tool_name, tool_args)
 
 
-def execute(intent: str, actor_context: dict, governance_decision: dict[str, Any], tool_name: str, tool_args: dict) -> dict[str, Any]:
+def _execute_via_interceptor(
+    intent: str,
+    actor_context: dict,
+    governance_decision: dict[str, Any],
+    tool_name: str,
+    tool_args: dict,
+) -> dict[str, Any]:
     return _ensure_default_authority()._execute(intent, actor_context, governance_decision, tool_name, tool_args)
+
+
+def execute(intent: str, actor_context: dict, governance_decision: dict[str, Any], tool_name: str, tool_args: dict) -> dict[str, Any]:
+    return {
+        "decision": "BLOCK",
+        "allow_secrets": False,
+        "token": None,
+        "verification": None,
+        "toxic_cost": None,
+        "constraints": [],
+        "executed": False,
+        "result": None,
+        "reason": "intercept_and_execute required",
+        "next_state": str(actor_context.get("current_state", "RESEARCH")),
+        "correlation_id": str(actor_context.get("correlation_id", "")),
+    }
 
 
 __all__ = [

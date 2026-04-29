@@ -1,70 +1,113 @@
 # Cognitive Firewall
 
-Cognitive Firewall is a runtime governance system for AI agents.
+Constraint-Engine is **runtime governance infrastructure for agents**.
 
-It sits between reasoning and execution.
+This repository has shifted from **validator** to **governor**:
 
-Agents do not act directly.
+- validator: classify/risk score outputs
+- governor: define and enforce pre-action execution boundaries
 
-They must pass through this system first.
+## Governance pipeline
 
----
+The runtime model is:
 
-## Why This Exists
+1. **permissioning** (state + policy + identity + solvency)
+2. **execution** (governed token-bound call path)
+3. **correction** (deterministic corrective routing)
+4. **audit** (violation and economic traceability)
 
-LLMs are probabilistic systems.
+```mermaid
+flowchart LR
+  A[evaluate_request] --> B[issue_governance_token]
+  B --> C[execute]
+  C --> D[audit]
+```
 
-They generate outputs based on likelihood, not truth.
+## Runtime state governance
 
-This becomes a critical failure point when agents:
+Supported operation modes:
 
-- execute financial transactions  
-- call APIs  
-- control infrastructure  
-- interact with real-world systems  
+- `RESEARCH`
+- `DRAFTING`
+- `READ_ONLY`
+- `TRANSACTION`
+- `PRIVILEGED`
+- `HUMAN_REVIEW`
+- `QUARANTINED`
 
-Cognitive Firewall solves this by enforcing deterministic control before execution.
+Policies can target states and transitions and can deny or permit state movement.
 
----
+## Constraint hierarchy
 
-## What It Does
+Constraint levels:
 
-- intercepts agent intent  
-- evaluates constraints (financial, logical, epistemic)  
-- detects domain mismatch (wrong reasoning context)  
-- blocks unsafe execution  
-- issues governance tokens for permitted actions  
+- `HARD` (immutable)
+- `SOFT` (override requires explicit justification)
+- `GOAL` (task/session scoped)
 
----
+Constraint packs (examples):
 
-## Key Property
+- `packs/financial_pack.json`
+- `packs/privacy_pack.json`
+- `packs/brand_pack.json`
+- `packs/system_pack.json`
 
-If Cognitive Firewall is in the execution path:
+## Intent classes
 
-→ the agent cannot act without it
+Intent classes are separated from raw tool names:
 
----
+- `DATA_ACCESS`
+- `DATA_EXPORT`
+- `COMMUNICATION`
+- `PAYMENT`
+- `TRADE`
+- `SYSTEM_MODIFICATION`
+- `AUTHORIZATION`
+- `UNKNOWN`
 
-## Example
+## Sidecar-friendly API
 
-Agent intent:
+`governance_service.py` exposes:
 
-"Use gravitational models to optimize portfolio allocation"
+- `evaluate_request(...)`
+- `issue_governance_token(...)`
+- `execute(...)`
 
-Cognitive Firewall:
+Designed for future FastAPI/gRPC sidecar deployment.
 
-- detects domain mismatch (physics → finance)  
-- flags epistemic failure  
-- blocks execution  
+## Boundary API
 
----
+Public boundary functions in `gate.py`:
 
-## Positioning
+```python
+configure_authority(...)
+register_tool(...)
+issue_governance_token(intent, actor_context, tool_name, tool_args)
+execute(intent, actor_context, governance_decision, tool_name, tool_args)
+```
 
-This is not an AI model.
+Execution is blocked unless governance decision is `ALLOW`, token is present, and token context matches intent/tool/payload.
 
-This is not a safety wrapper.
+## What this proves
 
-This is:
+- denied requests cannot execute.
+- execution requires governed token.
+- tokens bind intent/tool/payload.
+- state survives restart with SQLite store.
+- secret access is denied unless explicitly allowed.
 
-→ a control layer for agent execution
+## Quickstart
+
+```bash
+# run full tests
+python -m unittest discover -s tests -v
+
+# run middleware demo
+python middleware_example.py
+
+# run deterministic domain mismatch demo
+python demo_domain_mismatch.py
+
+# run benchmark
+python benchmark_firewall_economics.py
+```

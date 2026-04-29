@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
-from gate import execute as _execute
+from gate import _execute_via_interceptor
 from gate import issue_governance_token as _issue_governance_token
 from gate import mint_issuance_ticket
 from intent_classification import classify_intent
@@ -71,4 +71,4 @@ def issue_governance_token(intent: str, actor_context: dict, tool_name: str, too
 
 
 def execute(intent: str, actor_context: dict, governance_decision: dict[str, Any], tool_name: str, tool_args: dict):
-    return _execute(intent, actor_context, governance_decision, tool_name, tool_args)
+    return _execute_via_interceptor(intent, actor_context, governance_decision, tool_name, tool_args)

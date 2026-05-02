@@ -69,7 +69,22 @@ def main() -> int:
         },
         _ctx(),
     )
-    print(json.dumps({"allowed": allowed, "denied": denied, "speculative": speculative, "tool_calls": adapter.calls["n"]}, indent=2, sort_keys=True))
+    def print_summary(name: str, out: dict) -> None:
+        print(name)
+        print(f"decision: {out.get('decision')}")
+        print(f"reason: {out.get('reason')}")
+        print(f"executed: {out.get('executed')}")
+        if out.get("max_allocation_pct") is not None:
+            print(f"max_allocation_pct: {out.get('max_allocation_pct')}")
+        if isinstance(out.get("simulation"), dict):
+            print(f"survival_rate: {out['simulation'].get('thesis_survival_rate')}")
+        if out.get("falsification_triggers"):
+            print(f"falsification_triggers: {out.get('falsification_triggers')}")
+
+    print_summary("=== MCP Demo: allowed ===", allowed)
+    print_summary("=== MCP Demo: denied ===", denied)
+    print_summary("=== MCP Demo: speculative ===", speculative)
+    print(f"tool_calls: {adapter.calls['n']}")
     return 0
 
 

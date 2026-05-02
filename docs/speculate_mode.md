@@ -7,6 +7,7 @@
 - `BLOCK`: uncertainty or governance constraints fail; no execution.
 
 Cognitive-firewall does not eliminate speculation. It prevents speculation from pretending to be verified knowledge.
+Simulation does not predict the future. It stress-tests whether a speculative thesis remains coherent under adverse assumption changes.
 
 ## Assumption maps
 

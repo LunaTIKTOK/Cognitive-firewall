@@ -6,6 +6,8 @@ Constraint-Engine is **runtime governance infrastructure for agents**.
 
 Cognitive-firewall is runtime governance middleware for consequential agent actions. It is not a generic prompt filter. It routes intent through deterministic domain checks, uncertainty bounds, governance policy/state checks, token issuance, and authorized execution with audit receipts.
 
+Simulation does not predict the future. It stress-tests whether a speculative thesis remains coherent under adverse assumption changes.
+
 This repository has shifted from **validator** to **governor**:
 
 - validator: classify/risk score outputs
@@ -115,7 +117,7 @@ intercept_and_execute(intent, actor_context)
 ```
 
 Execution path:
-`intent -> interceptor -> domain check -> governance evaluation -> token issuance -> internal authorized execution -> tool`.
+`intent -> interceptor -> domain mismatch -> uncertainty -> simulation -> governance -> token issuance -> internal authorized execution -> audit`.
 
 `gate.execute(...)` is intentionally blocked and always returns `BLOCK` with reason `intercept_and_execute required` to prevent direct execution bypasses.
 

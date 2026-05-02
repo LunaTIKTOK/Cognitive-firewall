@@ -1,9 +1,20 @@
 from __future__ import annotations
 
-import json
-
 from gate import KeyRing, PaymentGate, configure_authority, register_tool
 from interceptor import intercept_and_execute
+
+
+def _print_summary(name: str, out: dict) -> None:
+    print(name)
+    print(f"decision: {out.get('decision')}")
+    print(f"reason: {out.get('reason')}")
+    print(f"executed: {out.get('executed')}")
+    if out.get("max_allocation_pct") is not None:
+        print(f"max_allocation_pct: {out.get('max_allocation_pct')}")
+    if isinstance(out.get("simulation"), dict):
+        print(f"survival_rate: {out['simulation'].get('thesis_survival_rate')}")
+    if out.get("falsification_triggers"):
+        print(f"falsification_triggers: {out.get('falsification_triggers')}")
 
 
 def main() -> int:
@@ -49,8 +60,7 @@ def main() -> int:
     }
     result = intercept_and_execute(request, actor_context)
 
-    print("=== Domain Mismatch Demo Result ===")
-    print(json.dumps(result, indent=2, sort_keys=True))
+    _print_summary("=== Domain Mismatch Demo Summary ===", result)
     return 0
 
 

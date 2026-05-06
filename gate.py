@@ -21,11 +21,14 @@ from toxic_cost import price_toxic_tokens
 from verify import evaluate_input
 
 
-class _GlassWingCore:
+class _UntrustedAgentCore:
     """Untrusted proposer core. Direct execution is forbidden."""
 
     def run(self, *_args: Any, **_kwargs: Any) -> Any:
         raise RuntimeError("UNAUTHORIZED_EXECUTION: direct core access is blocked by constitutional authority")
+
+
+_GlassWingCore = _UntrustedAgentCore
 
 
 @dataclass
@@ -53,7 +56,7 @@ class KeyRing:
         return self.keys.get(key_id)
 
 
-VALID_STATES = {"RESEARCH", "READ_ONLY", "TRANSACTION", "PRIVILEGED", "HUMAN_REVIEW", "QUARANTINED"}
+VALID_STATES = {state.value for state in RuntimeState}
 SECRET_FIELD_TOKENS = ("secret", "password", "token", "api_key", "credential", "auth")
 
 
@@ -199,7 +202,7 @@ class _ConstitutionalAuthority:
         self._used_token_store = used_token_store or create_used_token_store_from_env()
         self._audit_logger = audit_logger
         self._reputation_record = ReputationRecord()
-        self._core = _GlassWingCore()
+        self._core = _UntrustedAgentCore()
         self._tools: dict[str, Callable[[dict[str, Any]], Any]] = {}
         self._issuance_tickets: dict[str, str] = {}
         self._governance_state_store = governance_state_store or create_governance_state_store_from_env()

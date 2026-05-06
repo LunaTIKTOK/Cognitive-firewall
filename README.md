@@ -1,6 +1,8 @@
-# Cognitive Firewall
+# Cognitive Firewall Aperture
 
-Constraint-Engine is **runtime governance infrastructure for agents**.
+Cognitive Firewall Aperture is runtime governance and uncertainty-pricing infrastructure for AI agent execution.
+
+The aperture is the governed opening between agent reasoning and real-world execution. It determines how much action, if any, an agent is allowed to take.
 
 ## 30-second explanation
 
@@ -13,33 +15,18 @@ This repository has shifted from **validator** to **governor**:
 - validator: classify/risk score outputs
 - governor: define and enforce pre-action execution boundaries
 
-## Governance pipeline
-
-The runtime model is:
-
-1. **permissioning** (state + policy + identity + solvency)
-2. **execution** (governed token-bound call path)
-3. **correction** (deterministic corrective routing)
-4. **audit** (violation and economic traceability)
-
-```mermaid
-flowchart LR
-  A[evaluate_request] --> B[issue_governance_token]
-  B --> C[execute]
-  C --> D[audit]
-```
-
 ## Execution architecture
 
 ```mermaid
 flowchart LR
   A[Agent intent] --> B[interceptor.intercept_and_execute]
-  B --> C[domain check]
+  B --> C[domain mismatch check]
   C --> D[uncertainty gate]
-  D --> E[governance evaluation]
-  E --> F[token issuance]
-  F --> G[internal authorized execution]
-  G --> H[audit]
+  D --> E[simulation gate]
+  E --> F[runtime governance]
+  F --> G[token issuance]
+  G --> H[internal authorized execution]
+  H --> I[audit receipt]
 ```
 
 See also:
@@ -47,6 +34,9 @@ See also:
 - [Threat model](docs/threat_model.md)
 - [SPECULATE mode](docs/speculate_mode.md)
 - [Architecture](docs/architecture.md)
+- [Aperture model](docs/aperture_model.md)
+- [API contract](docs/api_contract.md)
+- [Demo outputs](docs/demo_outputs.md)
 
 ## Runtime state governance
 
@@ -183,6 +173,18 @@ python benchmark_firewall_economics.py
   "violations": ["gravity"],
   "executed": false
 }
+```
+
+### Windows PowerShell quickstart
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m unittest discover -s tests -v
+python demo_domain_mismatch.py
+python demo_speculative_mode.py
+python demo_simulation_speculation.py
+python examples/mcp_demo.py
 ```
 
 `python demo_speculative_mode.py`:

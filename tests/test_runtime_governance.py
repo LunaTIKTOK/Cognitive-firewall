@@ -84,6 +84,16 @@ class RuntimeGovernanceTests(unittest.TestCase):
         )
         self.assertEqual(d.status, "ALLOW")
 
+    def test_drafting_state_is_accepted_for_token_issuance(self):
+        actor_context = self._actor_context()
+        actor_context["current_state"] = RuntimeState.DRAFTING.value
+        actor_context["requested_next_state"] = RuntimeState.READ_ONLY.value
+        tool_args = {"claim": "safe"}
+        actor_context["governance_issuance_ticket"] = mint_issuance_ticket("query_customer_data", actor_context, "tool.scan", tool_args)
+        issuance = gate_issue_governance_token("query_customer_data", actor_context, "tool.scan", tool_args)
+        self.assertEqual(issuance["decision"], "ALLOW")
+        self.assertIsNotNone(issuance["token"])
+
     def test_correction_requirement_generation(self):
         d = evaluate_runtime_governance(
             current_state=RuntimeState.TRANSACTION,

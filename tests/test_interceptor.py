@@ -58,6 +58,8 @@ class InterceptorTests(unittest.TestCase):
         self.assertEqual(out["reason"], "DOMAIN_MISMATCH")
         self.assertEqual(out["violations"], ["gravity"])
         self.assertFalse(out["executed"])
+        self.assertIn("simulation", out)
+        self.assertIn("speculative", out)
 
     def test_secret_tool_blocked_when_not_allowed(self):
         out = intercept_and_execute(
@@ -225,6 +227,76 @@ class InterceptorTests(unittest.TestCase):
         self.assertEqual(out["reason"], "SIMULATION_ALLOCATION_EXCEEDS_CAP")
         self.assertIn("simulation", out)
         issue_mock.assert_not_called()
+
+    def test_invalid_runtime_state_fails_closed(self):
+        ctx = self._ctx()
+        ctx["current_state"] = "NOT_A_STATE"
+        out = intercept_and_execute(
+            {"intent": "query_customer_data", "intent_text": "safe claim", "tool_name": "tool.scan", "tool_args": {"claim": "safe"}, "domain": "finance"},
+            ctx,
+        )
+        self.assertEqual(out["decision"], "BLOCK")
+        self.assertEqual(out["reason"], "INVALID_RUNTIME_STATE")
+        self.assertFalse(out["executed"])
+
+    def test_invalid_requested_next_state_fails_closed(self):
+        ctx = self._ctx()
+        ctx["requested_next_state"] = "BAD_STATE"
+        with patch("interceptor.evaluate_request") as evaluate_mock, patch("interceptor.issue_governance_token") as issue_mock:
+            out = intercept_and_execute(
+                {"intent": "query_customer_data", "intent_text": "safe claim", "tool_name": "tool.scan", "tool_args": {"claim": "safe"}, "domain": "finance"},
+                ctx,
+            )
+        self.assertEqual(out["decision"], "BLOCK")
+        self.assertEqual(out["reason"], "INVALID_RUNTIME_STATE")
+        evaluate_mock.assert_not_called()
+        issue_mock.assert_not_called()
+
+    def test_simulation_requires_assumptions_blocks_before_token_issuance(self):
+        ctx = self._ctx()
+        with patch("interceptor.evaluate_request") as evaluate_mock, patch("interceptor.issue_governance_token") as issue_mock:
+            out = intercept_and_execute(
+                {"intent": "invest", "intent_text": "forward thesis", "tool_name": "tool.scan", "tool_args": {"requested_allocation_pct": 1.0}, "domain": "energy", "run_simulation": True},
+                ctx,
+            )
+        self.assertEqual(out["decision"], "BLOCK")
+        self.assertEqual(out["reason"], "SIMULATION_REQUIRES_ASSUMPTIONS")
+        evaluate_mock.assert_not_called()
+        issue_mock.assert_not_called()
+
+    def test_governance_denial_response_has_normalized_fields(self):
+        with patch("interceptor.evaluate_request") as evaluate_mock:
+            class DenyDecision:
+                status = "DENY"
+                correction_requirement = None
+            evaluate_mock.return_value = DenyDecision()
+            out = intercept_and_execute(
+                {"intent": "query_customer_data", "intent_text": "safe claim", "tool_name": "tool.scan", "tool_args": {"claim": "safe"}, "domain": "finance"},
+                self._ctx(),
+            )
+        for key in ["decision", "executed", "reason", "violations", "epistemic_status", "speculative", "max_allocation_pct", "confidence_average", "falsification_triggers", "simulation"]:
+            self.assertIn(key, out)
+
+    def test_simulation_block_response_has_normalized_fields(self):
+        out = intercept_and_execute(
+            {
+                "intent": "invest",
+                "intent_text": "thesis",
+                "tool_name": "tool.scan",
+                "tool_args": {"claim": "thesis", "requested_allocation_pct": 0.1},
+                "domain": "energy",
+                "run_simulation": True,
+                "assumptions": [
+                    {"assumption": "a", "status": "OBSERVABLE", "confidence": 0.1, "evidence": ["signal"], "falsification_trigger": "x", "critical": True, "low": 0.0, "base": 0.1, "high": 0.2, "weight": 1.0},
+                ],
+                "confidence_average": 0.5,
+                "simulation_count": 200,
+            },
+            self._ctx(),
+        )
+        self.assertEqual(out["decision"], "BLOCK")
+        for key in ["decision", "executed", "reason", "violations", "epistemic_status", "speculative", "max_allocation_pct", "confidence_average", "falsification_triggers", "simulation"]:
+            self.assertIn(key, out)
 
 
 if __name__ == "__main__":

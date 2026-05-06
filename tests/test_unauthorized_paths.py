@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from authority import InMemoryUsedTokenStore, SQLiteUsedTokenStore, build_token, compute_payload_hash, serialize_token
-from gate import KeyRing, _GlassWingCore, configure_authority, execute_authorized_from_interceptor, issue_governance_token, mint_issuance_ticket, register_tool
+from gate import KeyRing, _UntrustedAgentCore, configure_authority, execute_authorized_from_interceptor, issue_governance_token, mint_issuance_ticket, register_tool
 from mcp_executor import PaymentGate, SQLitePaymentGate, SecurityViolationError
 
 
@@ -46,7 +46,7 @@ class UnauthorizedPathAuditTests(unittest.TestCase):
 
     def test_direct_core_access_fails(self):
         with self.assertRaises(RuntimeError):
-            _GlassWingCore().run("unsafe")
+            _UntrustedAgentCore().run("unsafe")
 
     def test_executor_cannot_bootstrap_lifecycle(self):
         store = InMemoryUsedTokenStore()

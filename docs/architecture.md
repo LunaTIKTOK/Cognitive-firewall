@@ -1,15 +1,16 @@
-# Cognitive-firewall Runtime Architecture
+# Cognitive Firewall Aperture Runtime Architecture
 
 ```mermaid
 flowchart LR
   A[Agent intent] --> B[Interceptor]
   B --> C[Domain Mismatch Gate]
   C --> D[Uncertainty Gate]
-  D --> E[Runtime Governance]
-  E --> F[Token Issuance]
-  F --> G[Internal Authorized Execution]
-  G --> H[MCP Executor]
-  H --> I[Audit Receipt]
+  D --> E[Simulation Gate]
+  E --> F[Runtime Governance]
+  F --> G[Token Issuance]
+  G --> H[Internal Authorized Execution]
+  H --> I[MCP Executor]
+  I --> J[Audit Receipt]
 ```
 
-This architecture is execution governance middleware: it controls consequential tool execution, not generic prompt scanning.
+This architecture is an agent execution aperture: it controls consequential tool execution between reasoning and action, and is not generic network security middleware.

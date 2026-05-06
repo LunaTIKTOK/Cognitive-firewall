@@ -5,7 +5,7 @@ from pathlib import Path
 
 from audit import ALLOWED_CODES, AuditLogger
 from authority import InMemoryUsedTokenStore, build_token, compute_payload_hash, serialize_token
-from gate import KeyRing, _GlassWingCore, configure_authority, execute_authorized_from_interceptor, issue_governance_token, mint_issuance_ticket, register_tool
+from gate import KeyRing, _UntrustedAgentCore, configure_authority, execute_authorized_from_interceptor, issue_governance_token, mint_issuance_ticket, register_tool
 from mcp_executor import PaymentGate, SecurityViolationError
 
 
@@ -113,7 +113,7 @@ class Stage3GovernanceTests(unittest.TestCase):
 
     def test_direct_core_access_failure(self):
         with self.assertRaises(RuntimeError):
-            _GlassWingCore().run("x")
+            _UntrustedAgentCore().run("x")
 
     def test_allowed_codes_contains_security_violation(self):
         self.assertIn("SECURITY_VIOLATION", ALLOWED_CODES)

@@ -31,6 +31,31 @@ def detect_domain_mismatch(intent_text: str, domain: str) -> list[str]:
 
 
 def intercept_and_execute(intent: dict, actor_context: dict) -> dict[str, Any]:
+    def _response(
+        *,
+        decision: str,
+        executed: bool,
+        reason: str | None,
+        violations: list[str] | None = None,
+        epistemic_status: str | None = None,
+        speculative: bool = False,
+        max_allocation_pct: float | None = None,
+        confidence_average: float | None = None,
+        falsification_triggers: list[str] | None = None,
+        simulation: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        return {
+            "decision": decision,
+            "executed": executed,
+            "reason": reason,
+            "violations": violations,
+            "epistemic_status": epistemic_status,
+            "speculative": speculative,
+            "max_allocation_pct": max_allocation_pct,
+            "confidence_average": confidence_average,
+            "falsification_triggers": list(falsification_triggers or []),
+            "simulation": simulation,
+        }
     intent_name = str(intent.get("intent") or intent.get("intent_text") or "")
     intent_text = str(intent.get("intent_text") or intent_name)
     tool_name = str(intent.get("tool_name") or actor_context.get("tool_id") or "")
@@ -44,16 +69,13 @@ def intercept_and_execute(intent: dict, actor_context: dict) -> dict[str, Any]:
 
     violations = detect_domain_mismatch(intent_text, domain)
     if violations:
-        return {
-            "decision": "BLOCK",
-            "executed": False,
-            "reason": "DOMAIN_MISMATCH",
-            "violations": violations,
-            "epistemic_status": "UNSTABLE",
-        }
+        return _response(decision="BLOCK", executed=False, reason="DOMAIN_MISMATCH", violations=violations, epistemic_status="UNSTABLE")
 
     assumptions_raw = intent.get("assumptions")
     claim = str(intent.get("claim") or tool_args.get("claim") or intent_text)
+    if bool(intent.get("run_simulation", False)) and not assumptions_raw:
+        return _response(decision="BLOCK", executed=False, reason="SIMULATION_REQUIRES_ASSUMPTIONS", epistemic_status="UNSTABLE", speculative=True)
+
     if assumptions_raw:
         assumptions = [
             Assumption(
@@ -82,31 +104,11 @@ def intercept_and_execute(intent: dict, actor_context: dict) -> dict[str, Any]:
         )
         uncertainty = evaluate_uncertainty(assumption_map)
         if uncertainty["decision"] == "BLOCK":
-            return {
-                "decision": "BLOCK",
-                "executed": False,
-                "reason": str(uncertainty["reason"]),
-                "violations": None,
-                "epistemic_status": "UNSTABLE",
-                "speculative": False,
-                "max_allocation_pct": uncertainty["max_allocation_pct"],
-                "confidence_average": uncertainty["confidence_average"],
-                "falsification_triggers": uncertainty["falsification_triggers"],
-            }
+            return _response(decision="BLOCK", executed=False, reason=str(uncertainty["reason"]), epistemic_status="UNSTABLE", speculative=False, max_allocation_pct=uncertainty["max_allocation_pct"], confidence_average=uncertainty["confidence_average"], falsification_triggers=uncertainty["falsification_triggers"])
         if uncertainty["decision"] == "SPECULATE":
             requested_allocation_pct = intent.get("requested_allocation_pct", tool_args.get("requested_allocation_pct"))
             if requested_allocation_pct is None or float(requested_allocation_pct) > float(uncertainty["max_allocation_pct"]):
-                return {
-                    "decision": "BLOCK",
-                    "executed": False,
-                    "reason": "SPECULATIVE_ALLOCATION_EXCEEDS_CAP",
-                    "violations": None,
-                    "epistemic_status": "UNSTABLE",
-                    "speculative": True,
-                    "max_allocation_pct": uncertainty["max_allocation_pct"],
-                    "confidence_average": uncertainty["confidence_average"],
-                    "falsification_triggers": uncertainty["falsification_triggers"],
-                }
+                return _response(decision="BLOCK", executed=False, reason="SPECULATIVE_ALLOCATION_EXCEEDS_CAP", epistemic_status="UNSTABLE", speculative=True, max_allocation_pct=uncertainty["max_allocation_pct"], confidence_average=uncertainty["confidence_average"], falsification_triggers=uncertainty["falsification_triggers"])
             speculative = True
         confidence_average = uncertainty["confidence_average"]
         max_allocation_pct = uncertainty["max_allocation_pct"]
@@ -131,36 +133,19 @@ def intercept_and_execute(intent: dict, actor_context: dict) -> dict[str, Any]:
                 seed=int(intent.get("simulation_seed", 42)),
             )
             if simulation_output["decision"] == "BLOCK":
-                return {
-                    "decision": "BLOCK",
-                    "executed": False,
-                    "reason": str(simulation_output.get("reason") or "SIMULATION_BLOCKED"),
-                    "violations": None,
-                    "epistemic_status": "UNSTABLE",
-                    "speculative": True,
-                    "max_allocation_pct": simulation_output["max_allocation_pct"],
-                    "confidence_average": confidence_average,
-                    "falsification_triggers": simulation_output["falsification_triggers"],
-                    "simulation": {k: simulation_output[k] for k in ["simulation_count", "thesis_survival_rate", "sensitivity", "fragile_assumptions", "max_allocation_pct", "falsification_triggers"]},
-                }
+                sim = {k: simulation_output[k] for k in ["simulation_count", "thesis_survival_rate", "sensitivity", "fragile_assumptions", "max_allocation_pct", "falsification_triggers"]}
+                return _response(decision="BLOCK", executed=False, reason=str(simulation_output.get("reason") or "SIMULATION_BLOCKED"), epistemic_status="UNSTABLE", speculative=True, max_allocation_pct=simulation_output["max_allocation_pct"], confidence_average=confidence_average, falsification_triggers=simulation_output["falsification_triggers"], simulation=sim)
             if requested_allocation_pct is None or float(requested_allocation_pct) > min(float(max_allocation_pct), float(simulation_output["max_allocation_pct"])):
-                return {
-                    "decision": "BLOCK",
-                    "executed": False,
-                    "reason": "SIMULATION_ALLOCATION_EXCEEDS_CAP",
-                    "violations": None,
-                    "epistemic_status": "UNSTABLE",
-                    "speculative": True,
-                    "max_allocation_pct": simulation_output["max_allocation_pct"],
-                    "confidence_average": confidence_average,
-                    "falsification_triggers": simulation_output["falsification_triggers"],
-                    "simulation": {k: simulation_output[k] for k in ["simulation_count", "thesis_survival_rate", "sensitivity", "fragile_assumptions", "max_allocation_pct", "falsification_triggers"]},
-                }
+                sim = {k: simulation_output[k] for k in ["simulation_count", "thesis_survival_rate", "sensitivity", "fragile_assumptions", "max_allocation_pct", "falsification_triggers"]}
+                return _response(decision="BLOCK", executed=False, reason="SIMULATION_ALLOCATION_EXCEEDS_CAP", epistemic_status="UNSTABLE", speculative=True, max_allocation_pct=simulation_output["max_allocation_pct"], confidence_average=confidence_average, falsification_triggers=simulation_output["falsification_triggers"], simulation=sim)
             max_allocation_pct = min(float(max_allocation_pct), float(simulation_output["max_allocation_pct"]))
             falsification_triggers = list(simulation_output["falsification_triggers"])
 
-    current_state = RuntimeState[str(actor_context.get("current_state", RuntimeState.RESEARCH.value))]
-    requested_next_state = RuntimeState[str(actor_context.get("requested_next_state", RuntimeState.READ_ONLY.value))]
+    try:
+        current_state = RuntimeState[str(actor_context.get("current_state", RuntimeState.RESEARCH.value))]
+        requested_next_state = RuntimeState[str(actor_context.get("requested_next_state", RuntimeState.READ_ONLY.value))]
+    except KeyError:
+        return _response(decision="BLOCK", executed=False, reason="INVALID_RUNTIME_STATE", epistemic_status="UNSTABLE", speculative=speculative, max_allocation_pct=max_allocation_pct, confidence_average=confidence_average, falsification_triggers=falsification_triggers)
     eval_decision = evaluate_request(
         intent=intent_name,
         tool_name=tool_name,
@@ -171,49 +156,19 @@ def intercept_and_execute(intent: dict, actor_context: dict) -> dict[str, Any]:
     )
     if eval_decision.status == "DENY":
         reason = eval_decision.correction_requirement.required_action if eval_decision.correction_requirement else "governance evaluation denied"
-        return {"decision": "BLOCK", "executed": False, "reason": reason, "violations": None, "epistemic_status": None, "speculative": speculative, "max_allocation_pct": max_allocation_pct, "confidence_average": confidence_average, "falsification_triggers": falsification_triggers}
+        return _response(decision="BLOCK", executed=False, reason=reason, speculative=speculative, max_allocation_pct=max_allocation_pct, confidence_average=confidence_average, falsification_triggers=falsification_triggers)
 
     issuance = issue_governance_token(intent_name, actor_context, tool_name, tool_args)
     if issuance.get("decision") != "ALLOW" or issuance.get("token") is None:
-        return {"decision": "BLOCK", "executed": False, "reason": str(issuance.get("reason") or "governance denied"), "violations": None, "epistemic_status": None, "speculative": speculative, "max_allocation_pct": max_allocation_pct, "confidence_average": confidence_average, "falsification_triggers": falsification_triggers}
+        return _response(decision="BLOCK", executed=False, reason=str(issuance.get("reason") or "governance denied"), speculative=speculative, max_allocation_pct=max_allocation_pct, confidence_average=confidence_average, falsification_triggers=falsification_triggers)
 
     if requires_secrets(tool_name) and not bool(issuance.get("allow_secrets", False)):
-        return {
-            "decision": "BLOCK",
-            "executed": False,
-            "reason": "secret access denied",
-            "violations": ["SECRET_ACCESS_DENIED"],
-            "epistemic_status": None,
-            "speculative": speculative,
-            "max_allocation_pct": max_allocation_pct,
-            "confidence_average": confidence_average,
-            "falsification_triggers": falsification_triggers,
-        }
+        return _response(decision="BLOCK", executed=False, reason="secret access denied", violations=["SECRET_ACCESS_DENIED"], speculative=speculative, max_allocation_pct=max_allocation_pct, confidence_average=confidence_average, falsification_triggers=falsification_triggers)
 
     result = execute_authorized_from_interceptor(intent_name, actor_context, issuance, tool_name, tool_args)
     if result.get("decision") == "BLOCK":
-        return {
-            "decision": "BLOCK",
-            "executed": False,
-            "reason": str(result.get("reason")),
-            "violations": None,
-            "epistemic_status": None,
-            "speculative": speculative,
-            "max_allocation_pct": max_allocation_pct,
-            "confidence_average": confidence_average,
-            "falsification_triggers": falsification_triggers,
-        }
-    response = {
-        "decision": "SPECULATE" if speculative else "ALLOW",
-        "executed": bool(result.get("executed", False)),
-        "reason": None,
-        "violations": None,
-        "epistemic_status": None,
-        "speculative": speculative,
-        "max_allocation_pct": max_allocation_pct,
-        "confidence_average": confidence_average,
-        "falsification_triggers": falsification_triggers,
-    }
+        return _response(decision="BLOCK", executed=False, reason=str(result.get("reason")), speculative=speculative, max_allocation_pct=max_allocation_pct, confidence_average=confidence_average, falsification_triggers=falsification_triggers)
+    response = _response(decision="SPECULATE" if speculative else "ALLOW", executed=bool(result.get("executed", False)), reason=None, speculative=speculative, max_allocation_pct=max_allocation_pct, confidence_average=confidence_average, falsification_triggers=falsification_triggers)
     if simulation_output is not None:
         response["simulation"] = {k: simulation_output[k] for k in ["simulation_count", "thesis_survival_rate", "sensitivity", "fragile_assumptions", "max_allocation_pct", "falsification_triggers"]}
     return response

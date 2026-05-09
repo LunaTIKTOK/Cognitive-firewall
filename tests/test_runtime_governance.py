@@ -227,7 +227,7 @@ class RuntimeGovernanceTests(unittest.TestCase):
         actor_context = self._actor_context()
         actor_context["approval_token"] = ""
         actor_context["current_state"] = RuntimeState.TRANSACTION.value
-        actor_context["requested_next_state"] = RuntimeState.PRIVILEGED.value
+        actor_context["requested_next_state"] = RuntimeState.READ_ONLY.value
         tool_args = {"claim": "unsafe payment transfer"}
 
         decision = evaluate_request(
@@ -262,7 +262,7 @@ class RuntimeGovernanceTests(unittest.TestCase):
         actor_context = self._actor_context()
         actor_context["state"] = "RESEARCH"
         actor_context["current_state"] = RuntimeState.RESEARCH.value
-        actor_context["requested_next_state"] = RuntimeState.READ_ONLY.value
+        actor_context["requested_next_state"] = RuntimeState.TRANSACTION.value
         tool_args = {"claim": "safe claim"}
 
         actor_context["governance_issuance_ticket"] = mint_issuance_ticket(
@@ -272,6 +272,53 @@ class RuntimeGovernanceTests(unittest.TestCase):
         issuance = gate_issue_governance_token("payment_transfer", actor_context, "tool.scan", tool_args)
         self.assertEqual(issuance["decision"], "BLOCK")
         self.assertEqual(issuance["next_state"], "RESEARCH")
+
+    def test_gate_respects_requested_next_state(self):
+        actor_context = self._actor_context()
+        actor_context["current_state"] = RuntimeState.READ_ONLY.value
+        actor_context["requested_next_state"] = RuntimeState.DRAFTING.value
+        tool_args = {"claim": "safe claim"}
+        actor_context["governance_issuance_ticket"] = mint_issuance_ticket("query_customer_data", actor_context, "tool.scan", tool_args)
+        issuance = gate_issue_governance_token("query_customer_data", actor_context, "tool.scan", tool_args)
+        self.assertEqual(issuance["decision"], "ALLOW")
+        self.assertEqual(issuance["next_state"], RuntimeState.DRAFTING.value)
+
+    def test_interceptor_and_gate_state_decision_are_consistent(self):
+        actor_context = self._actor_context()
+        actor_context["current_state"] = RuntimeState.READ_ONLY.value
+        actor_context["requested_next_state"] = RuntimeState.DRAFTING.value
+        tool_args = {"claim": "safe claim"}
+        evaluate_request(
+            intent="query_customer_data",
+            tool_name="tool.scan",
+            actor_context=actor_context,
+            tool_args=tool_args,
+            current_state=RuntimeState.READ_ONLY,
+            requested_next_state=RuntimeState.DRAFTING,
+        )
+        issuance = issue_governance_token("query_customer_data", actor_context, "tool.scan", tool_args)
+        self.assertEqual(issuance["decision"], "ALLOW")
+        self.assertEqual(issuance["next_state"], RuntimeState.DRAFTING.value)
+
+    def test_gate_invalid_current_state_blocks(self):
+        actor_context = self._actor_context()
+        actor_context["current_state"] = "BAD_STATE"
+        actor_context["requested_next_state"] = RuntimeState.READ_ONLY.value
+        tool_args = {"claim": "safe claim"}
+        actor_context["governance_issuance_ticket"] = mint_issuance_ticket("query_customer_data", actor_context, "tool.scan", tool_args)
+        issuance = gate_issue_governance_token("query_customer_data", actor_context, "tool.scan", tool_args)
+        self.assertEqual(issuance["decision"], "BLOCK")
+        self.assertEqual(issuance["reason"], "INVALID_RUNTIME_STATE")
+
+    def test_gate_invalid_requested_next_state_blocks(self):
+        actor_context = self._actor_context()
+        actor_context["current_state"] = RuntimeState.READ_ONLY.value
+        actor_context["requested_next_state"] = "BAD_STATE"
+        tool_args = {"claim": "safe claim"}
+        actor_context["governance_issuance_ticket"] = mint_issuance_ticket("query_customer_data", actor_context, "tool.scan", tool_args)
+        issuance = gate_issue_governance_token("query_customer_data", actor_context, "tool.scan", tool_args)
+        self.assertEqual(issuance["decision"], "BLOCK")
+        self.assertEqual(issuance["reason"], "INVALID_RUNTIME_STATE")
 
     def test_allow_secrets_false_blocks_secret_tool(self):
         actor_context = self._actor_context()
@@ -363,8 +410,8 @@ class RuntimeGovernanceTests(unittest.TestCase):
             "payment_transfer", actor_context, "tool.scan", tool_args
         )
         issuance = gate_issue_governance_token("payment_transfer", actor_context, "tool.scan", tool_args)
-        self.assertEqual(issuance["decision"], "BLOCK")
-        self.assertIn("invalid transition", issuance["reason"])
+        self.assertEqual(issuance["decision"], "ALLOW")
+        self.assertIsNone(issuance["reason"])
 
     def test_execution_without_governance_decision_blocks(self):
         actor_context = self._actor_context()

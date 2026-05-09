@@ -74,6 +74,27 @@ class InterceptorTests(unittest.TestCase):
         )
         self.assertEqual(out["decision"], "BLOCK")
         self.assertFalse(out["executed"])
+        self.assertIn("simulation", out)
+
+    def test_secret_tool_denied_before_token_issuance(self):
+        with patch("interceptor.evaluate_request") as evaluate_mock, patch("interceptor.issue_governance_token") as issue_mock, patch(
+            "interceptor.execute_authorized_from_interceptor"
+        ) as execute_mock:
+            out = intercept_and_execute(
+                {
+                    "intent": "query_customer_data",
+                    "intent_text": "safe claim",
+                    "tool_name": "tool.secret.fetch",
+                    "tool_args": {"claim": "safe"},
+                    "domain": "physics",
+                },
+                self._ctx(),
+            )
+        self.assertEqual(out["decision"], "BLOCK")
+        self.assertEqual(out["reason"], "SECRET_ACCESS_DENIED_BEFORE_TOKEN_ISSUANCE")
+        evaluate_mock.assert_not_called()
+        issue_mock.assert_not_called()
+        execute_mock.assert_not_called()
 
     def test_interceptor_allowed_path_executes_registered_tool_once(self):
         ctx = self._ctx()

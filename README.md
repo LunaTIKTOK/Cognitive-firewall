@@ -37,6 +37,7 @@ See also:
 - [Aperture model](docs/aperture_model.md)
 - [API contract](docs/api_contract.md)
 - [Demo outputs](docs/demo_outputs.md)
+- [Ticket issuance](docs/ticket_issuance.md)
 
 ## Runtime state governance
 
@@ -160,6 +161,45 @@ python middleware_example.py
 # run benchmark
 python benchmark_firewall_economics.py
 ```
+
+## Installation
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+```
+
+## Running tests
+
+```bash
+python -m unittest discover -s tests -v
+```
+
+## Running demos
+
+```bash
+python demo_domain_mismatch.py
+python demo_speculative_mode.py
+python demo_simulation_speculation.py
+python examples/mcp_demo.py
+```
+
+## Development rules
+
+- Public execution entrypoint is `interceptor.intercept_and_execute(...)`.
+- `gate.execute(...)` must remain blocked.
+- `governance_service.execute(...)` must remain blocked.
+- New execution paths must not bypass the interceptor.
+- Boundary failures must return structured `BLOCK` responses.
+
+See:
+
+- [CONTRIBUTING.md](CONTRIBUTING.md)
+- [SECURITY.md](SECURITY.md)
+- [CHANGELOG.md](CHANGELOG.md)
+- [LICENSE](LICENSE)
 
 ## Demo outputs (compact)
 

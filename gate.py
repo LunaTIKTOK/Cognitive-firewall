@@ -28,9 +28,6 @@ class _UntrustedAgentCore:
         raise RuntimeError("UNAUTHORIZED_EXECUTION: direct core access is blocked by constitutional authority")
 
 
-_GlassWingCore = _UntrustedAgentCore
-
-
 @dataclass
 class KeyRing:
     active_key_id: str
@@ -78,6 +75,9 @@ def redact_secret_fields(tool_args: dict[str, Any]) -> dict[str, Any]:
 
 
 class GovernanceStateStore:
+    def has_agent_state(self, agent_id: str) -> bool:
+        raise NotImplementedError
+
     def get_agent_state(self, agent_id: str) -> str:
         raise NotImplementedError
 
@@ -95,6 +95,9 @@ class InMemoryGovernanceStateStore(GovernanceStateStore):
     def __init__(self) -> None:
         self._agent_states: dict[str, str] = {}
         self._token_next_state: dict[str, str] = {}
+
+    def has_agent_state(self, agent_id: str) -> bool:
+        return agent_id in self._agent_states
 
     def get_agent_state(self, agent_id: str) -> str:
         return self._agent_states.get(agent_id, "RESEARCH")
@@ -117,6 +120,11 @@ class SQLiteGovernanceStateStore(GovernanceStateStore):
             conn.execute("CREATE TABLE IF NOT EXISTS agent_state(agent_id TEXT PRIMARY KEY, state TEXT NOT NULL)")
             conn.execute("CREATE TABLE IF NOT EXISTS token_state(token_id TEXT PRIMARY KEY, next_state TEXT NOT NULL)")
             conn.commit()
+
+    def has_agent_state(self, agent_id: str) -> bool:
+        with self._lock, sqlite3.connect(self._path) as conn:
+            row = conn.execute("SELECT 1 FROM agent_state WHERE agent_id = ?", (agent_id,)).fetchone()
+            return row is not None
 
     def get_agent_state(self, agent_id: str) -> str:
         with self._lock, sqlite3.connect(self._path) as conn:
@@ -165,8 +173,7 @@ def _next_state_for_intent(intent: str) -> str:
     return "READ_ONLY"
 
 
-def is_valid_transition(current_state: str, intent: str) -> bool:
-    next_state = _next_state_for_intent(intent)
+def is_valid_transition(current_state: str, next_state: str) -> bool:
     if current_state == "RESEARCH" and next_state == "TRANSACTION":
         return False
     if current_state == "READ_ONLY" and next_state == "TRANSACTION":
@@ -176,13 +183,13 @@ def is_valid_transition(current_state: str, intent: str) -> bool:
     return True
 
 
-def _transition_decision(current_state: str, intent: str) -> tuple[bool, str, str | None]:
-    next_state = _next_state_for_intent(intent)
-    if current_state not in VALID_STATES:
-        return False, current_state, f"invalid current state: {current_state}"
+def _transition_decision(current_state: str, intent: str, requested_next_state: str | None = None) -> tuple[bool, str, str | None]:
+    next_state = requested_next_state if requested_next_state is not None else _next_state_for_intent(intent)
+    if current_state not in VALID_STATES or next_state not in VALID_STATES:
+        return False, current_state, "INVALID_RUNTIME_STATE"
     if current_state == "TRANSACTION" and next_state == "PRIVILEGED":
         return False, "HUMAN_REVIEW", "transition requires human review"
-    if not is_valid_transition(current_state, intent):
+    if not is_valid_transition(current_state, next_state):
         return False, current_state, f"invalid transition {current_state} -> {next_state}"
     return True, next_state, None
 
@@ -282,13 +289,42 @@ class _ConstitutionalAuthority:
             ],
         )
 
+
+    def _resolve_current_state(self, agent_id: str, actor_context: dict[str, Any]) -> str:
+        if self._governance_state_store.has_agent_state(agent_id):
+            return self._governance_state_store.get_agent_state(agent_id)
+        return str(actor_context.get("current_state", RuntimeState.RESEARCH.value))
+
+    def _resolve_requested_next_state(self, intent: str, actor_context: dict[str, Any]) -> str:
+        requested = actor_context.get("requested_next_state")
+        return str(requested) if requested is not None else _next_state_for_intent(intent)
+
     def issue_governance_token(self, intent: str, actor_context: dict[str, Any], tool_name: str, tool_args: dict[str, Any]) -> dict[str, Any]:
         correlation_id = str(actor_context.get("correlation_id", uuid.uuid4().hex))
         actor_context["correlation_id"] = correlation_id
         agent_id = str(actor_context.get("agent_id", ""))
-        current_state = self._governance_state_store.get_agent_state(agent_id)
-        transition_ok, next_state, transition_reason = _transition_decision(current_state, intent)
         allow_secrets = bool(actor_context.get("allow_secrets", not requires_secrets(tool_name)))
+        if requires_secrets(tool_name) and not allow_secrets:
+            return {
+                "decision": "BLOCK",
+                "allow_secrets": False,
+                "token": None,
+                "reason": "SECRET_ACCESS_DENIED_BEFORE_TOKEN_ISSUANCE",
+                "next_state": str(actor_context.get("current_state", RuntimeState.RESEARCH.value)),
+                "correlation_id": correlation_id,
+            }
+        current_state = self._resolve_current_state(agent_id, actor_context)
+        requested_next_state_str = self._resolve_requested_next_state(intent, actor_context)
+        if current_state not in VALID_STATES or requested_next_state_str not in VALID_STATES:
+            return {
+                "decision": "BLOCK",
+                "allow_secrets": allow_secrets,
+                "token": None,
+                "reason": "INVALID_RUNTIME_STATE",
+                "next_state": current_state,
+                "correlation_id": correlation_id,
+            }
+        transition_ok, next_state, transition_reason = _transition_decision(current_state, intent, requested_next_state_str)
 
         if not transition_ok:
             return {
@@ -439,8 +475,19 @@ class _ConstitutionalAuthority:
                 "executed": False,
             }
 
-        current_state = self._governance_state_store.get_agent_state(agent_id)
-        transition_ok, next_state, transition_reason = _transition_decision(current_state, intent)
+        current_state = self._resolve_current_state(agent_id, actor_context)
+        requested_next_state_str = self._resolve_requested_next_state(intent, actor_context)
+        if current_state not in VALID_STATES or requested_next_state_str not in VALID_STATES:
+            return {
+                "decision": "BLOCK",
+                "allow_secrets": bool(governance_decision.get("allow_secrets", False)),
+                "token": token,
+                "reason": "INVALID_RUNTIME_STATE",
+                "next_state": current_state,
+                "correlation_id": correlation_id,
+                "executed": False,
+            }
+        transition_ok, next_state, transition_reason = _transition_decision(current_state, intent, requested_next_state_str)
         allow_secrets = bool(governance_decision.get("allow_secrets", False))
 
         if issuance_decision != "ALLOW" or not transition_ok:
@@ -469,7 +516,7 @@ class _ConstitutionalAuthority:
                 "decision": "BLOCK",
                 "allow_secrets": False,
                 "token": token,
-                "reason": "tool requires secrets but allow_secrets is false",
+                "reason": "SECRET_ACCESS_DENIED_BEFORE_TOKEN_ISSUANCE",
                 "next_state": next_state,
                 "correlation_id": correlation_id,
                 "executed": False,

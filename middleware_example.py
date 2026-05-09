@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-from gate import KeyRing, _GlassWingCore, configure_authority, register_tool
+from gate import KeyRing, _UntrustedAgentCore, configure_authority, register_tool
 from interceptor import intercept_and_execute
 from mcp_executor import PaymentGate
 
@@ -66,7 +66,7 @@ def main() -> int:
     print("LOW_BALANCE_INTERCEPT_OUTCOME:", poor_outcome)
 
     try:
-        _GlassWingCore().run("unsafe")
+        _UntrustedAgentCore().run("unsafe")
     except RuntimeError as exc:
         print("DIRECT_BYPASS_BLOCKED:", str(exc))
 

@@ -71,6 +71,16 @@ def intercept_and_execute(intent: dict, actor_context: dict) -> dict[str, Any]:
     if violations:
         return _response(decision="BLOCK", executed=False, reason="DOMAIN_MISMATCH", violations=violations, epistemic_status="UNSTABLE")
 
+    if requires_secrets(tool_name) and not bool(actor_context.get("allow_secrets", False)):
+        return _response(
+            decision="BLOCK",
+            executed=False,
+            reason="SECRET_ACCESS_DENIED_BEFORE_TOKEN_ISSUANCE",
+            violations=["SECRET_ACCESS_DENIED"],
+            epistemic_status="UNSTABLE",
+            speculative=False,
+        )
+
     assumptions_raw = intent.get("assumptions")
     claim = str(intent.get("claim") or tool_args.get("claim") or intent_text)
     if bool(intent.get("run_simulation", False)) and not assumptions_raw:
@@ -163,7 +173,7 @@ def intercept_and_execute(intent: dict, actor_context: dict) -> dict[str, Any]:
         return _response(decision="BLOCK", executed=False, reason=str(issuance.get("reason") or "governance denied"), speculative=speculative, max_allocation_pct=max_allocation_pct, confidence_average=confidence_average, falsification_triggers=falsification_triggers)
 
     if requires_secrets(tool_name) and not bool(issuance.get("allow_secrets", False)):
-        return _response(decision="BLOCK", executed=False, reason="secret access denied", violations=["SECRET_ACCESS_DENIED"], speculative=speculative, max_allocation_pct=max_allocation_pct, confidence_average=confidence_average, falsification_triggers=falsification_triggers)
+        return _response(decision="BLOCK", executed=False, reason="SECRET_ACCESS_DENIED_BEFORE_TOKEN_ISSUANCE", violations=["SECRET_ACCESS_DENIED"], speculative=speculative, max_allocation_pct=max_allocation_pct, confidence_average=confidence_average, falsification_triggers=falsification_triggers)
 
     result = execute_authorized_from_interceptor(intent_name, actor_context, issuance, tool_name, tool_args)
     if result.get("decision") == "BLOCK":
